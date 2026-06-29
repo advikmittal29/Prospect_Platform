@@ -1,0 +1,835 @@
+================================================================================
+AI AGENT IMPLEMENTATION PROMPT: AGENT STUDIO TREE VIEW RESTRUCTURING
+================================================================================
+
+OBJECTIVE & CONTEXT:
+You are an expert full-stack developer tasked with implementing a comprehensive
+UI restructuring for a prospect platform. The system needs to transform from a 
+flat navigation model to a hierarchical "Agent Studio" with tree-view navigation
+and comprehensive agent settings management forms.
+
+CURRENT STATE:
+- React TypeScript frontend with Vite build system
+- FastAPI Python backend with SQLAlchemy ORM
+- Existing agent models: AgentDefinitionORM, AgentProfileORM, AgentKeywordORM
+- Current routing: agent/:agentId/companies, /prospects, /lead-sources
+- Current navigation: ShellLayout component with flat NavItems
+
+TARGET STATE:
+- Hierarchical tree view in left sidebar
+- Agent nodes expandable/collapsible
+- Child menu items: Companies, Prospects, Lead Sources, Settings
+- Complete agent settings forms (6 major forms)
+- Form validation, auto-save, error handling
+- Responsive design (desktop/tablet/mobile)
+
+================================================================================
+PART 1: FRONTEND IMPLEMENTATION GUIDE
+================================================================================
+
+TASK 1.1: CREATE TREE VIEW COMPONENT ARCHITECTURE
+───────────────────────────────────────────────────
+
+Location: src/components/AgentStudio/
+
+Create the following component hierarchy:
+
+1. TreeViewContainer.tsx (parent container)
+   - Manages tree state (expanded agents, active agent, active page)
+   - Fetches agent list on mount
+   - Handles agent selection events
+   - Emits agent/page change events to parent
+
+2. TreeView.tsx (tree renderer)
+   - Renders list of agents as tree nodes
+   - Handles expand/collapse toggle
+   - Shows loading states
+   - Responsive: collapses to dropdown on mobile
+
+3. AgentNode.tsx (individual agent in tree)
+   - Displays agent name + status badge
+   - Expandable/collapsible with ChevronIcon
+   - Shows expand/collapse animation
+   - Context menu (edit, delete, duplicate)
+   - Highlight when active
+
+4. AgentMenuItems.tsx (child items under agent)
+   - Dashboard, Companies, Prospects, Lead Sources, Settings
+   - Highlighted when current page matches
+   - Icon + label for each item
+   - Active state styling
+   - Dashboard as first item for quick access
+
+5. AgentActions.tsx (tree actions bar)
+   - [+ New Agent] button
+   - Search/filter agents
+   - View toggle (tree / card view) - optional
+   - Sort options
+
+REQUIREMENTS:
+- Use React hooks (useState, useContext, useEffect)
+- Store tree state in localStorage for persistence
+- Implement smooth collapse/expand animation (CSS transitions)
+- Support keyboard navigation (arrow keys, tab, enter)
+- Show loading skeleton while agents are loading
+- Handle errors gracefully with retry option
+
+CODE STRUCTURE:
+```typescript
+// src/components/AgentStudio/TreeViewContainer.tsx
+interface TreeViewState {
+  expandedAgents: Set<number>;
+  activeAgentId: number | null;
+  activePage: 'companies' | 'prospects' | 'lead-sources' | 'settings';
+  loading: boolean;
+  error: string | null;
+}
+
+export function TreeViewContainer() {
+  const [state, dispatch] = useReducer(treeReducer, initialState);
+  // Implementation...
+}
+```
+
+ACCEPTANCE CRITERIA:
+✓ Agents load and display in tree view
+✓ Expand/collapse works smoothly with animation
+✓ Clicking agent highlights it
+✓ Clicking menu item navigates to correct route
+✓ Active page shows visual indicator
+✓ Status badges show correctly (Active/Paused/Archived)
+✓ Keyboard navigation works (Tab, Arrow, Enter)
+✓ Responsive collapse on mobile (< 768px)
+✓ Tree state persists in localStorage
+✓ Loading and error states display properly
+
+────────────────────────────────────────────────────
+
+TASK 1.2: IMPLEMENT AGENT SETTINGS FORMS
+────────────────────────────────────────────────────
+
+Location: src/pages/AgentSettingsPage.tsx and src/components/AgentSettings/
+
+Create modular form components:
+
+1. BasicInfoForm.tsx
+   Fields:
+   - agent_key (text, unique, slug format, disabled if editing)
+   - name (text, required)
+   - description (textarea, optional)
+   - agent_type (dropdown: custom, staffing)
+   - status (radio: active, paused, archived)
+
+   Validation:
+   - agent_key: /^[a-z0-9_-]+$/, max 100 chars
+   - name: required, max 255 chars
+   - description: max 1000 chars
+   - No duplicate agent_key
+
+   Error Handling:
+   - Show inline field errors
+   - Disable submit if validation fails
+   - Show loading spinner during submit
+   - Display success toast
+
+2. SalesProfileForm.tsx
+   Fields:
+   - persona_title (text, required)
+   - domain_focus (text, required)
+   - service_offering (textarea, required)
+   - sales_objective (textarea, required)
+   - target_buyer_roles (multi-select tags)
+   - value_outcomes (multi-select tags)
+
+   Features:
+   - Rich text editor for text areas (optional)
+   - Tag autocomplete from existing values
+   - Add/remove tags dynamically
+   - Character count for text areas
+   - "Save as Draft" button for incomplete forms
+
+3. KeywordConfigForm.tsx
+   Fields:
+   - keyword_type (filter: all, title_include, title_exclude, company_size, industry, tech_stack)
+   - Keyword table with columns: Type, Keyword, Weight, Active, Actions
+   - Add new keyword row with inputs: type dropdown, keyword text, weight number
+   - Bulk actions: enable all, disable all, delete selected
+
+   Features:
+   - Sortable/filterable table (by type, active status)
+   - Inline edit (click to edit, click away to save)
+   - Drag-to-reorder rows (future)
+   - Import/export keywords (CSV) (future)
+   - Duplicate detection warning
+   - Default weight: 1.0, range 0.1-3.0
+
+4. RuntimePolicyForm.tsx
+   Fields:
+   - max_api_calls_per_run (number, default 100)
+   - monthly_budget_limit (number, default 5000)
+   - min_confidence_threshold (slider 0-1, default 0.75)
+   - enabled_tools (checkboxes: linkedin, apollo, company_discovery, email_verify)
+   - rate_limiting_rpm (requests per minute)
+   - concurrent_tasks (max parallel tasks)
+
+   Features:
+   - Slider with numeric input (linked)
+   - Budget warning at 80% used (visual indicator)
+   - Tool enable/disable with info tooltips
+   - Preset configurations (aggressive, balanced, conservative)
+   - "Reset to Default" button
+
+5. ChannelPolicyForm.tsx
+   Fields:
+   - preferred_channels (checkboxes: linkedin_dm, email, phone, sms)
+   - email_from (text, must be valid email)
+   - email_signature (textarea)
+   - message_template (select existing or create new)
+   - suppression_enabled (checkbox)
+   - bounce_list_enabled (checkbox)
+   - cooldown_period_days (number, default 3)
+
+   Features:
+   - Email validation on blur
+   - Template preview in modal
+   - Create new template inline or modal
+   - Cooldown period info tooltip
+   - DNC registry info (linked to data)
+
+6. FormWrapper/AgentSettingsTabs.tsx
+   - Tab interface (Basic, Profile, Keywords, Runtime, Channel)
+   - Auto-save draft detection
+   - Show unsaved indicator (orange dot)
+   - Confirm before losing changes
+   - Per-form error handling
+   - Submit all changes or individual forms
+
+TECHNOLOGY CHOICES:
+- Use React Hook Form for form state management
+- Use Zod for validation schemas
+- Use react-hot-toast for notifications
+- Use react-table for keyword table
+- Use recharts for policy visualization (optional)
+
+ACCEPTANCE CRITERIA:
+✓ All form fields render correctly
+✓ Validation works (real-time and on submit)
+✓ Submit calls correct API endpoint
+✓ Success/error messages display
+✓ Unsaved changes indicator shows
+✓ Undo/revert changes works
+✓ Keyboard navigation in forms (Tab, Enter)
+✓ Form state persists on page reload (draft)
+✓ Multi-field forms work independently
+✓ Responsive on all screen sizes
+
+────────────────────────────────────────────────────
+
+TASK 1.3: INTEGRATE NAVIGATION INTO SHELL LAYOUT
+────────────────────────────────────────────────────
+
+Modify: src/components/ShellLayout.tsx
+
+Changes:
+1. Replace flat NavGroup logic with TreeViewContainer integration
+2. Move agent navigation to TreeView component
+3. Keep global nav items (Dashboard, Controls, Settings) below agent tree
+4. Add search bar to filter agents in tree
+5. Add "Create Agent" modal trigger
+6. Handle responsive sidebar collapse on mobile
+
+Layout structure:
+```
+┌─────────────────────────────────────┐
+│  Logo | Search | User Menu          │  Header
+├─────────────────────────────────────┤
+│         │                           │
+│ TREE    │  Main Content             │  Sidebar + Main
+│ VIEW    │  (Outlet)                 │
+│         │                           │
+└─────────────────────────────────────┘
+```
+
+Responsive behavior:
+- Desktop (>1200px): Sidebar always visible
+- Tablet (768-1199px): Sidebar collapsible (hamburger menu)
+- Mobile (<768px): Agent selector as dropdown in header
+
+ACCEPTANCE CRITERIA:
+✓ TreeView displays in sidebar
+✓ Global nav items still accessible
+✓ Navigation updates URL correctly
+✓ Responsive layout works at all breakpoints
+✓ Mobile sidebar collapse/expand works
+✓ Agent switcher dropdown works on mobile
+✓ Breadcrumbs update correctly
+✓ Performance acceptable with many agents
+
+────────────────────────────────────────────────────
+
+TASK 1.4: IMPLEMENT CREATE AGENT WORKFLOW
+────────────────────────────────────────────────────
+
+Location: src/components/CreateAgentModal.tsx
+
+Flow:
+1. User clicks [+ New Agent] button
+2. Modal opens with agent creation form
+3. Minimal form: agent_key, name, description
+4. On submit: Create agent + redirect to settings
+5. Auto-generate agent_key from name (kebab-case)
+
+Features:
+- Real-time agent_key generation from name
+- Validation of agent_key uniqueness (API call)
+- Suggest next available agent_key if duplicate
+- Clear error messages
+- Cancel button
+- Loading state on submit
+
+ACCEPTANCE CRITERIA:
+✓ Modal opens on button click
+✓ Form validates before submit
+✓ API call creates agent
+✓ New agent appears in tree immediately
+✓ User redirected to agent settings
+✓ Error handling for duplicates/validation
+
+================================================================================
+PART 2: BACKEND API IMPLEMENTATION GUIDE
+================================================================================
+
+TASK 2.1: EXTEND AGENT ENDPOINTS
+─────────────────────────────────────
+
+File: app-ui/backend/app/routers/agents.py (create if not exists)
+
+Implement these endpoints:
+
+1. GET /api/agents
+   Response:
+   ```json
+   {
+     "items": [
+       {
+         "id": 1,
+         "agent_key": "agent-01",
+         "name": "Tech Sales Team",
+         "description": "...",
+         "status": "active",
+         "agent_type": "custom",
+         "created_at_utc": "2024-01-01T00:00:00Z",
+         "updated_at_utc": "2024-01-01T00:00:00Z"
+       }
+     ],
+     "total": 5,
+     "page": 1,
+     "page_size": 50
+   }
+   ```
+
+2. GET /api/agents/{agentId}
+   Response:
+   ```json
+   {
+     "agent": {...agent_definition...},
+     "profile": {...agent_profile...},
+     "keywords": [...agent_keywords...],
+     "tools": [...agent_tools...]
+   }
+   ```
+
+3. POST /api/agents
+   Request:
+   ```json
+   {
+     "agent_key": "agent-new",
+     "name": "New Agent",
+     "description": "...",
+     "agent_type": "custom",
+     "status": "active"
+   }
+   ```
+   Response: 201 + created agent
+
+4. PUT /api/agents/{agentId}
+   Fields: name, description, status (not agent_key - immutable)
+   Response: Updated agent
+
+5. PUT /api/agents/{agentId}/profile
+   Request (all optional):
+   ```json
+   {
+     "persona_title": "...",
+     "domain_focus": "...",
+     "service_offering": "...",
+     "sales_objective": "...",
+     "target_buyer_roles_json": [...],
+     "value_outcomes_json": [...]
+   }
+   ```
+   Response: Updated profile
+
+6. PUT /api/agents/{agentId}/keywords
+   Request:
+   ```json
+   {
+     "keywords": [
+       {
+         "id": 1,
+         "keyword_type": "title_include",
+         "keyword": "CTO",
+         "weight": 2.0,
+         "active": true
+       }
+     ]
+   }
+   ```
+   Response: Updated keywords list
+
+7. POST /api/agents/{agentId}/keywords
+   Add single keyword
+   Request:
+   ```json
+   {
+     "keyword_type": "title_include",
+     "keyword": "Director",
+     "weight": 1.5,
+     "active": true
+   }
+   ```
+   Response: Created keyword
+
+8. DELETE /api/agents/{agentId}/keywords/{keywordId}
+   Response: 204 No Content
+
+9. PUT /api/agents/{agentId}/policy
+   Request:
+   ```json
+   {
+     "max_api_calls_per_run": 100,
+     "monthly_budget_limit": 5000,
+     "min_confidence_threshold": 0.75,
+     "rate_limiting_rpm": 30,
+     "concurrent_tasks": 5,
+     "enabled_tools": ["linkedin", "apollo"]
+   }
+   ```
+   Response: Updated policy
+
+10. DELETE /api/agents/{agentId}
+    Soft delete (archive)
+    Response: 204
+
+VALIDATION RULES:
+- agent_key: unique, lowercase, alphanumeric + hyphen/underscore, 5-100 chars
+- name: required, 1-255 chars
+- description: 0-1000 chars
+- agent_type: enum [custom, staffing]
+- status: enum [active, paused, archived]
+- weight: 0.1-3.0
+- min_confidence_threshold: 0.0-1.0
+- monthly_budget_limit: > 0
+
+ERROR RESPONSES:
+- 400: Validation error (field-specific messages)
+- 404: Agent not found
+- 409: Conflict (duplicate agent_key)
+- 500: Server error
+
+IMPLEMENTATION PATTERN:
+```python
+from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel
+
+router = APIRouter(prefix="/api/agents", tags=["agents"])
+
+class AgentCreateRequest(BaseModel):
+    agent_key: str
+    name: str
+    description: Optional[str] = None
+    agent_type: str = "custom"
+    status: str = "active"
+
+@router.post("", status_code=status.HTTP_201_CREATED)
+async def create_agent(request: AgentCreateRequest):
+    # Validate agent_key uniqueness
+    # Create AgentDefinitionORM
+    # Return created agent
+    pass
+
+@router.get("/{agent_id}")
+async def get_agent(agent_id: int):
+    # Fetch agent + profile + keywords + tools
+    # Return combined response
+    pass
+```
+
+ACCEPTANCE CRITERIA:
+✓ All endpoints implemented
+✓ Proper HTTP status codes
+✓ Input validation on all endpoints
+✓ Unique constraint on agent_key enforced
+✓ Error messages are clear and field-specific
+✓ Soft delete (archive) works
+✓ Relationships between tables maintained
+✓ Database transactions for multi-table updates
+
+────────────────────────────────────────────────────
+
+TASK 2.2: IMPLEMENT FORM DATA PERSISTENCE
+─────────────────────────────────────────────────────
+
+Database considerations:
+- AgentDefinitionORM: agent_key, name, description, status, agent_type ✓ (already exists)
+- AgentProfileORM: persona_title, domain_focus, service_offering, sales_objective, 
+                   target_buyer_roles_json, value_outcomes_json ✓ (partially exists)
+- AgentKeywordORM: keyword_type, keyword, weight, active ✓ (already exists)
+- Extend AgentProfileORM if needed:
+  * Add: icp_rules_json (comprehensive ICP rules)
+  * Add: channel_policy_json (email, template, suppression)
+  * Add: runtime_policy_json (budgets, thresholds, rate limits)
+
+Implementation:
+```python
+# In db/models.py
+class AgentProfileORM(Base):
+    # ... existing fields ...
+    runtime_policy_json: Optional[str] = mapped_column(Text)
+    channel_policy_json: Optional[str] = mapped_column(Text)
+    
+    @property
+    def runtime_policy(self) -> dict:
+        return json.loads(self.runtime_policy_json or '{}')
+    
+    @property
+    def channel_policy(self) -> dict:
+        return json.loads(self.channel_policy_json or '{}')
+```
+
+ACCEPTANCE CRITERIA:
+✓ All form data stored in appropriate tables
+✓ JSON fields properly serialized/deserialized
+✓ Schema migrations handled
+✓ Data integrity maintained
+✓ Audit trail (created_by, timestamps) captured
+
+================================================================================
+PART 3: INTEGRATION & TESTING
+================================================================================
+
+TASK 3.1: FRONTEND-BACKEND INTEGRATION
+──────────────────────────────────────────
+
+Update: src/api/client.ts
+
+Add functions:
+```typescript
+// Agent Management
+export async function getAgents(): Promise<AgentListResponse>
+export async function getAgent(agentId: number): Promise<AgentDetailResponse>
+export async function createAgent(req: AgentCreateRequest): Promise<Agent>
+export async function updateAgent(agentId: number, req: AgentUpdateRequest): Promise<Agent>
+
+// Profile Management
+export async function updateAgentProfile(agentId: number, req: ProfileRequest): Promise<Profile>
+export async function getAgentProfile(agentId: number): Promise<Profile>
+
+// Keyword Management
+export async function getAgentKeywords(agentId: number): Promise<Keyword[]>
+export async function updateAgentKeywords(agentId: number, keywords: Keyword[]): Promise<Keyword[]>
+export async function addAgentKeyword(agentId: number, req: KeywordRequest): Promise<Keyword>
+export async function deleteAgentKeyword(agentId: number, keywordId: number): Promise<void>
+
+// Policy Management
+export async function updateAgentPolicy(agentId: number, req: PolicyRequest): Promise<Policy>
+export async function updateChannelPolicy(agentId: number, req: ChannelPolicyRequest): Promise<Policy>
+```
+
+Error handling:
+- Network errors → show toast + retry option
+- Validation errors → show field-specific messages
+- 404 → redirect to agent list
+- 409 (conflict) → show resolution dialog
+
+ACCEPTANCE CRITERIA:
+✓ All API functions implemented
+✓ Type safety (TypeScript)
+✓ Error handling + user feedback
+✓ Request/response bodies match API spec
+✓ Proper HTTP methods used
+
+────────────────────────────────────────────────────
+
+TASK 3.2: ROUTING UPDATES
+──────────────────────────────────────────────────
+
+File: src/App.tsx
+
+Update routes:
+```typescript
+<Route path="agent/:agentId" element={<AgentWorkspace />}>
+  <Route index element={<Navigate to="dashboard" replace />} />
+  <Route path="dashboard" element={<AgentDashboardPage />} />  {/* NEW */}
+  <Route path="companies" element={<AgentCompaniesPage />} />
+  <Route path="prospects" element={<AgentProspectsPage />} />
+  <Route path="lead-sources" element={<AgentLeadSourcesPage />} />
+  <Route path="settings" element={<AgentSettingsPage />} />  {/* NEW */}
+</Route>
+```
+
+Create AgentDashboardPage.tsx:
+- Display agent metrics overview
+- Show key performance indicators (KPIs)
+- Recent activity/runs timeline
+- Quick stats (prospects contacted, companies engaged, etc.)
+- Links to key agent data sections
+
+Add AgentSettingsPage.tsx:
+- Display agent settings tabs
+- Navigate between form components
+- Handle form submission
+- Show loading/error states
+
+ACCEPTANCE CRITERIA:
+✓ All routes accessible
+✓ URL updates correctly
+✓ Navigation works
+✓ Settings page loads all forms
+
+────────────────────────────────────────────────────
+
+TASK 3.3: TESTING REQUIREMENTS
+──────────────────────────────────────────────────
+
+Unit Tests:
+1. TreeView expand/collapse logic
+2. Form validation (each form)
+3. API client functions
+4. State management (reducers)
+
+Integration Tests:
+1. Create agent → appears in tree
+2. Edit settings → API updates
+3. Switch agents → data refreshes
+4. Form validation → prevents submission
+
+E2E Tests (Cypress):
+```typescript
+describe('Agent Studio Navigation', () => {
+  it('displays agents in tree view', () => {
+    cy.visit('/');
+    cy.get('[data-testid="agent-tree"]').should('be.visible');
+    cy.get('[data-testid="agent-node"]').should('have.length', 5);
+  });
+
+  it('navigates to agent companies page', () => {
+    cy.visit('/');
+    cy.get('[data-testid="agent-01"]').click();
+    cy.get('[data-testid="menu-companies"]').click();
+    cy.url().should('include', '/agent/1/companies');
+  });
+
+  it('creates new agent', () => {
+    cy.visit('/');
+    cy.get('[data-testid="btn-new-agent"]').click();
+    cy.get('input[name="name"]').type('New Agent');
+    cy.get('button[type="submit"]').click();
+    cy.get('[data-testid="agent-new-agent"]').should('be.visible');
+  });
+
+  it('submits agent settings form', () => {
+    cy.visit('/agent/1/settings');
+    cy.get('input[name="persona_title"]').type('VP Sales');
+    cy.get('button[type="submit"]').click();
+    cy.get('[data-testid="toast-success"]').should('be.visible');
+  });
+});
+```
+
+ACCEPTANCE CRITERIA:
+✓ Unit test coverage > 70%
+✓ Integration tests pass
+✓ E2E tests cover main flows
+✓ No console errors/warnings
+✓ Performance within thresholds
+
+================================================================================
+PART 4: IMPLEMENTATION CHECKLIST & MILESTONES
+================================================================================
+
+WEEK 1 - FOUNDATION:
+□ Create TreeViewContainer, TreeView, AgentNode components
+□ Implement basic expand/collapse functionality
+□ Add keyboard navigation (arrow keys, enter)
+□ Implement LocalStorage persistence
+□ Create AgentNode styling + animations
+□ Add loading/error states
+□ Responsive mobile layout
+□ Add Dashboard menu item as first child in agent menus
+
+WEEK 2 - FORMS & DASHBOARD:
+□ Create AgentDashboardPage with metrics & overview
+□ Create BasicInfoForm component + validation
+□ Create SalesProfileForm + validation
+□ Integrate React Hook Form + Zod
+□ Create FormWrapper with tabs
+□ Implement auto-save draft feature
+□ Implement unsaved changes warning
+□ Create AgentSettingsPage
+
+WEEK 3 - ADVANCED FORMS & BACKEND:
+□ Create KeywordConfigForm + table
+□ Create RuntimePolicyForm + sliders
+□ Create ChannelPolicyForm
+□ Implement backend API endpoints
+□ Implement form submission to backend
+□ Error handling + user feedback
+□ Test all API endpoints
+
+WEEK 4 - INTEGRATION & POLISH:
+□ Integrate TreeView into ShellLayout
+□ Update routing + create routes
+□ Create agent creation modal/flow
+□ Cross-browser testing
+□ Mobile responsiveness refinement
+□ Accessibility audit (WCAG 2.1 AA)
+□ Performance optimization
+□ E2E testing
+
+VERIFICATION CHECKLIST:
+├── FRONTEND
+│   ├── Navigation
+│   │   ✓ Tree view displays all agents
+│   │   ✓ Expand/collapse works smoothly
+│   │   ✓ Active state highlighting
+│   │   ✓ Dashboard menu item appears first under each agent
+│   │   ✓ Status badges render
+│   │   ✓ Keyboard navigation (arrow, tab, enter)
+│   │   ✓ Mobile dropdown alternative
+│   │   ✓ Responsive at 3 breakpoints
+│   │   ✓ TreeView persists state in localStorage
+│   │
+│   ├── Forms
+│   │   ✓ All 5 forms render correctly
+│   │   ✓ Validation prevents submission
+│   │   ✓ Success/error messages show
+│   │   ✓ Unsaved indicator displays
+│   │   ✓ Auto-save draft works
+│   │   ✓ Undo/revert changes works
+│   │   ✓ Tab navigation between forms
+│   │   ✓ Responsive form layout
+│   │
+│   ├── Pages
+│   │   ✓ AgentDashboardPage loads and displays metrics
+│   │   ✓ AgentSettingsPage loads all forms
+│   │   ✓ URL routing correct for dashboard
+│   │   ✓ Navigation to dashboard works from tree
+│   │   ✓ Breadcrumbs update
+│   │
+│   └── UX
+│       ✓ Loading skeletons appear
+│       ✓ Error messages clear
+│       ✓ Toast notifications work
+│       ✓ Modal dialogs functional
+│
+├── BACKEND
+│   ├── Endpoints
+│   │   ✓ GET /api/agents - list all
+│   │   ✓ GET /api/agents/{id} - fetch one
+│   │   ✓ POST /api/agents - create
+│   │   ✓ PUT /api/agents/{id} - update
+│   │   ✓ PUT /api/agents/{id}/profile - update profile
+│   │   ✓ PUT /api/agents/{id}/keywords - update keywords
+│   │   ✓ POST /api/agents/{id}/keywords - add keyword
+│   │   ✓ DELETE /api/agents/{id}/keywords/{kid} - delete keyword
+│   │   ✓ PUT /api/agents/{id}/policy - update policy
+│   │   ✓ DELETE /api/agents/{id} - soft delete
+│   │
+│   ├── Validation
+│   │   ✓ agent_key uniqueness enforced
+│   │   ✓ Field length constraints
+│   │   ✓ Enum validation (status, type)
+│   │   ✓ Numeric ranges (weight 0.1-3.0)
+│   │   ✓ Email format validation
+│   │
+│   └── Data
+│       ✓ All form data persisted
+│       ✓ JSON fields serialized/deserialized
+│       ✓ Timestamps (created_at, updated_at)
+│
+└── QUALITY
+    ├── Testing
+    │   ✓ Unit tests: validation, logic
+    │   ✓ Integration tests: form→API
+    │   ✓ E2E tests: full user flows
+    │   ✓ Test coverage > 70%
+    │
+    ├── Accessibility
+    │   ✓ ARIA labels on interactive elements
+    │   ✓ Semantic HTML (nav, main, etc)
+    │   ✓ Keyboard navigation complete
+    │   ✓ Color contrast WCAG AA
+    │   ✓ Screen reader compatible
+    │
+    ├── Performance
+    │   ✓ Tree render < 100ms (50 agents)
+    │   ✓ Form interaction < 16ms
+    │   ✓ API response < 500ms
+    │   ✓ Animation 60 FPS
+    │
+    └── Documentation
+        ✓ Component PropTypes documented
+        ✓ API endpoints documented
+        ✓ Form schemas documented
+        ✓ Setup instructions complete
+
+================================================================================
+COMPLETION CRITERIA
+================================================================================
+
+Implementation is COMPLETE when:
+
+1. FUNCTIONALITY
+   ✓ All agents display in tree view with expand/collapse
+   ✓ Dashboard page displays agent metrics and KPIs
+   ✓ All 5 settings forms render and function correctly
+   ✓ All API endpoints working with proper validation
+   ✓ Navigation smooth and responsive
+   ✓ Form data persists to backend
+
+2. USER EXPERIENCE
+   ✓ Tree view loads quickly with many agents (50+)
+   ✓ Form interactions feel responsive (< 100ms)
+   ✓ Error messages are helpful and specific
+   ✓ Success feedback is clear and confirmatory
+   ✓ Mobile experience matches desktop UX
+
+3. CODE QUALITY
+   ✓ No console errors or warnings
+   ✓ TypeScript strict mode passes
+   ✓ ESLint passes without overrides
+   ✓ Code follows project conventions
+   ✓ Components are reusable and documented
+
+4. TESTING
+   ✓ Unit test coverage > 70%
+   ✓ E2E tests cover all major flows
+   ✓ No flaky tests
+   ✓ Manual testing across browsers/devices passes
+
+5. ACCESSIBILITY
+   ✓ WCAG 2.1 Level AA compliance verified
+   ✓ Keyboard navigation works completely
+   ✓ Screen reader tested and compatible
+   ✓ Form labels properly associated
+
+6. DOCUMENTATION
+   ✓ All new components documented with JSDoc
+   ✓ API endpoints documented
+   ✓ Setup/installation steps clear
+   ✓ Usage examples provided
+
+================================================================================
+END OF IMPLEMENTATION PROMPT
+================================================================================

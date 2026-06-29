@@ -1,0 +1,495 @@
+================================================================================
+SYSTEM PROMPT: UI RESTRUCTURING WITH AGENT STUDIO TREE VIEW
+================================================================================
+
+OBJECTIVE:
+Restructure the prospect platform UI to implement a hierarchical "Agent Studio" 
+with a tree view navigation system. Replace flat navigation with a nested, 
+agent-centric interface where each agent acts as a container for its specific 
+business domains (companies, prospects, lead sources).
+
+================================================================================
+SECTION 1: NAVIGATION TREE STRUCTURE
+================================================================================
+
+TARGET ARCHITECTURE:
+├── Agent Studio (Header/Parent)
+│   ├── Agent 01 [Status: Active/Paused]
+│   │   ├── Dashboard (agent-specific overview & metrics)
+│   │   ├── Companies (agent-specific company management)
+│   │   ├── Prospects (agent-specific prospect pipeline)
+│   │   ├── Lead Sources (agent-specific lead source configuration)
+│   │   └── Settings ⚙️ (agent-specific configuration)
+│   │
+│   ├── Agent 02 [Status: Active/Paused]
+│   │   ├── Dashboard
+│   │   ├── Companies
+│   │   ├── Prospects
+│   │   ├── Lead Sources
+│   │   └── Settings ⚙️
+│   │
+│   ├── Agent 03 [Status: Active/Paused]
+│   │   ├── Dashboard
+│   │   ├── Companies
+│   │   ├── Prospects
+│   │   ├── Lead Sources
+│   │   └── Settings ⚙️
+│   │
+│   └── [+ Add New Agent] Button
+│
+└── Global Navigation
+    ├── Dashboard (system-wide overview)
+    ├── Controls (pipeline execution & monitoring)
+    ├── Settings (system & global configuration)
+    └── User Menu (profile, logout)
+
+NAVIGATION BEHAVIOR:
+- Tree view on left sidebar (collapsible per agent)
+- Single agent expanded by default (the active agent)
+- Clicking agent name toggles expansion
+- Clicking child menu items (Dashboard, Companies, Prospects, etc.) navigates immediately
+- Dashboard is first menu item for quick access to agent metrics
+- Visual indicators for:
+  * Active/Selected agent
+  * Child page currently being viewed
+  * Agent status (active/paused/archived)
+
+================================================================================
+SECTION 2: AGENT SETTINGS FORMS (COMPLETE SPECIFICATION)
+================================================================================
+
+AGENT BASIC INFORMATION FORM:
+┌─────────────────────────────────────┐
+│ Basic Information                   │
+├─────────────────────────────────────┤
+│                                     │
+│ Agent Key (Identifier)              │
+│ ┌─────────────────────────────────┐ │
+│ │ [Text Input - Slug Format]      │ │  [^Help: unique-identifier]
+│ └─────────────────────────────────┘ │
+│                                     │
+│ Agent Name                          │
+│ ┌─────────────────────────────────┐ │
+│ │ [Text Input]                    │ │  [^Help: e.g., "Tech Sales Team"]
+│ └─────────────────────────────────┘ │
+│                                     │
+│ Description                         │
+│ ┌─────────────────────────────────┐ │
+│ │ [Text Area 3 rows]              │ │  [^Help: agent purpose & focus]
+│ └─────────────────────────────────┘ │
+│                                     │
+│ Agent Type                          │
+│ ┌─────────────────────────────────┐ │
+│ │ ▼ [Dropdown: custom/staffing]   │ │
+│ └─────────────────────────────────┘ │
+│                                     │
+│ Status                              │
+│ ┌─────────────────────────────────┐ │
+│ │ ✓ Active  ○ Paused  ○ Archived  │ │
+│ └─────────────────────────────────┘ │
+│                                     │
+│ [Cancel] [Save]                     │
+└─────────────────────────────────────┘
+
+AGENT PROFILE FORM (Sales Persona Configuration):
+┌─────────────────────────────────────┐
+│ Sales Profile Configuration         │
+├─────────────────────────────────────┤
+│                                     │
+│ Persona Title *                     │
+│ ┌─────────────────────────────────┐ │
+│ │ [Text Input]                    │ │  [e.g., "Enterprise IT Director"]
+│ └─────────────────────────────────┘ │
+│                                     │
+│ Domain Focus *                      │
+│ ┌─────────────────────────────────┐ │
+│ │ [Text Input]                    │ │  [e.g., "Cloud Infrastructure"]
+│ └─────────────────────────────────┘ │
+│                                     │
+│ Service Offering *                  │
+│ ┌─────────────────────────────────┐ │
+│ │ [Text Area 3 rows]              │ │  [What do you sell?]
+│ └─────────────────────────────────┘ │
+│                                     │
+│ Sales Objective *                   │
+│ ┌─────────────────────────────────┐ │
+│ │ [Text Area 3 rows]              │ │  [Primary goal for sales]
+│ └─────────────────────────────────┘ │
+│                                     │
+│ Target Buyer Roles *                │
+│ ┌─────────────────────────────────┐ │
+│ │ [Multi-Select Input]            │ │  [Tags: CTO, VP Eng, etc.]
+│ │ [+ Add Role]                    │ │
+│ └─────────────────────────────────┘ │
+│                                     │
+│ Value Outcomes *                    │
+│ ┌─────────────────────────────────┐ │
+│ │ [Multi-Select Input]            │ │  [Tags: Cost reduction, etc.]
+│ │ [+ Add Outcome]                 │ │
+│ └─────────────────────────────────┘ │
+│                                     │
+│ [Cancel] [Save as Draft] [Save]     │
+└─────────────────────────────────────┘
+
+TARGET KEYWORD CONFIGURATION FORM:
+┌─────────────────────────────────────────────────────┐
+│ Targeting Keywords (ICP Rules)                      │
+├─────────────────────────────────────────────────────┤
+│                                                     │
+│ [Keyword Type Filter]                              │
+│ ○ All  ○ Title Include  ○ Title Exclude            │
+│ ○ Company Size  ○ Industry  ○ Technology Stack    │
+│                                                     │
+│ Current Keywords:                                   │
+│ ┌─────────────────────────────────────────────────┐ │
+│ │ ┌──────────┬────────────┬────────┬────────────┐ │ │
+│ │ │ Type     │ Keyword    │ Weight │ Active     │ │ │
+│ │ ├──────────┼────────────┼────────┼────────────┤ │ │
+│ │ │ Title    │ CTO        │ 2.0    │ ✓          │ │ │
+│ │ │ Title    │ VP Eng     │ 2.0    │ ✓          │ │ │
+│ │ │ Industry │ Technology │ 1.5    │ ✓          │ │ │
+│ │ │ Company  │ 100-500    │ 1.0    │ ✓          │ │ │
+│ │ └──────────┴────────────┴────────┴────────────┘ │ │
+│ │                                                 │ │
+│ │ [Edit] [Delete]  [Duplicate]                   │ │
+│ └─────────────────────────────────────────────────┘ │
+│                                                     │
+│ Add New Keyword:                                    │
+│ ┌──────────────────┐  ┌────────────┐  ┌────────┐   │
+│ │ ▼ Type           │  │ Keyword    │  │ Weight │   │
+│ ├──────────────────┤  ├────────────┤  ├────────┤   │
+│ │ Title Include    │  │ [Input]    │  │ 1.0    │   │
+│ └──────────────────┘  └────────────┘  └────────┘   │
+│                       [Active] ✓                    │
+│                       [+ Add]                       │
+│                                                     │
+│ [Close] [Save]                                      │
+└─────────────────────────────────────────────────────┘
+
+AGENT RUNTIME POLICY FORM:
+┌─────────────────────────────────────┐
+│ Runtime Policies & Limits           │
+├─────────────────────────────────────┤
+│                                     │
+│ Execution Policies:                 │
+│                                     │
+│ Max API Calls Per Run               │
+│ ┌─────────────────────────────────┐ │
+│ │ [Number Input] [Default: 100]   │ │
+│ └─────────────────────────────────┘ │
+│                                     │
+│ Monthly Budget Limit ($)            │
+│ ┌─────────────────────────────────┐ │
+│ │ [Number Input] [Default: 5000]  │ │
+│ └─────────────────────────────────┘ │
+│                                     │
+│ Min Confidence Threshold (0-1)      │
+│ ┌─────────────────────────────────┐ │
+│ │ [Slider: 0.6 --[●]------- 1.0]  │ │
+│ └─────────────────────────────────┘ │
+│ Value: 0.75                         │
+│                                     │
+│ Tool Options:                       │
+│                                     │
+│ ☑ LinkedIn Search Tools             │
+│ ☑ Apollo Enrichment Tools           │
+│ ☑ Company Discovery Tools           │
+│ ☐ Email Verification Tools          │
+│                                     │
+│ Rate Limiting:                      │
+│ Requests Per Minute: [Num]          │
+│ Concurrent Tasks: [Num]             │
+│                                     │
+│ [Cancel] [Reset to Default] [Save]  │
+└─────────────────────────────────────┘
+
+CHANNEL & COMMUNICATION POLICIES:
+┌─────────────────────────────────────┐
+│ Communication Policies              │
+├─────────────────────────────────────┤
+│                                     │
+│ Preferred Outreach Channels:        │
+│ ☑ LinkedIn DM                       │
+│ ☑ Email                             │
+│ ☐ Phone                             │
+│ ☐ SMS                               │
+│                                     │
+│ Email Configuration:                │
+│ From Email:                         │
+│ ┌─────────────────────────────────┐ │
+│ │ [Text Input]                    │ │
+│ └─────────────────────────────────┘ │
+│                                     │
+│ Signature:                          │
+│ ┌─────────────────────────────────┐ │
+│ │ [Text Area]                     │ │
+│ └─────────────────────────────────┘ │
+│                                     │
+│ Message Templates:                  │
+│ ┌─────────────────────────────────┐ │
+│ │ [Select Template] ▼              │ │  [Create/Edit]
+│ └─────────────────────────────────┘ │
+│                                     │
+│ Suppression & Compliance:           │
+│ ☑ Do Not Contact Registry           │
+│ ☑ Bounce List Management            │
+│ ☑ Cooldown Period (days): [Num]     │
+│                                     │
+│ [Cancel] [Save]                     │
+└─────────────────────────────────────┘
+
+AGENT DASHBOARD PAGE:
+┌─────────────────────────────────────────────────────┐
+│ Agent Dashboard: Tech Sales Team                    │
+├─────────────────────────────────────────────────────┤
+│                                                     │
+│ [Key Metrics Row]                                   │
+│ ┌──────────┐  ┌──────────┐  ┌──────────┐ ┌────────┐│
+│ │ Companies│  │ Prospects│  │   Leads  │ │Contacts││
+│ │   142    │  │   1,203  │  │   847    │ │ 3,459  ││
+│ │ Engaged  │  │ Pipeline │  │ Sourced  │ │  Made  ││
+│ └──────────┘  └──────────┘  └──────────┘ └────────┘│
+│                                                     │
+│ [Recent Activity Timeline]                          │
+│ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━   │
+│ Latest: Research Pipeline Run - 2 hours ago        │
+│         Completed: 45 prospects enriched           │
+│ 5 days ago: Ingest Pipeline Run - 285 new leads   │
+│ 12 days ago: Intelligence Pipeline - 12 new deals │
+│                                                     │
+│ [Quick Actions]                                     │
+│ [View All Companies] [View All Prospects]          │
+│ [Configure Lead Sources] [View Recent Runs]        │
+│                                                     │
+│ [Performance Chart]                                 │
+│ Performance Trend (Last 30 Days)                   │
+│ ┌─────────────────────────────────────────────────┐│
+│ │  [Line Chart: Companies, Prospects, Contacts] │ │
+│ │                                                 │ │
+│ └─────────────────────────────────────────────────┘│
+│                                                     │
+│ [Agent Status & Configuration Summary]              │
+│ Status: ✓ Active | Type: Custom | Updated: 2h ago │
+│                                                     │
+└─────────────────────────────────────────────────────┘
+
+Agent Dashboard Content Components:
+- MetricCard: Displays KPI with value, label, trend
+- ActivityTimeline: Shows recent pipeline runs
+- QuickActionsBar: Links to major agent sections
+- PerformanceChart: Line/bar chart of agent activity
+- StatusSummary: Agent status and last update info
+- Responsive: Stacks vertically on mobile
+
+================================================================================
+SECTION 3: COMPONENT REQUIREMENTS
+================================================================================
+
+AGENT DASHBOARD PAGE (React):
+- Displays agent-specific metrics and overview
+- Shows key performance indicators (KPIs)
+  * Companies engaged
+  * Prospects in pipeline
+  * Lead sources configured
+  * Contacts made
+- Recent activity timeline showing pipeline runs
+- Performance trend chart (last 30 days)
+- Quick action buttons to major sections
+- Agent status badge and last updated info
+- Responsive layout (grid on desktop, stack on mobile)
+- Real-time updates if data changes
+- Loading skeleton while data fetches
+
+TREE VIEW COMPONENT (React):
+- Recursive tree node rendering
+- Expand/collapse animation
+- Context menu (delete, edit agent)
+- Drag-and-drop reordering support (future)
+- Active state highlighting
+- Status badge (Active/Paused/Archived) with color coding
+- Loading skeleton on navigation
+- Icons for each item (agent icon, menu icons)
+
+MODAL/SIDEBAR FORM COMPONENTS:
+- Form validation (real-time and on submit)
+- Field-level help text (info icons with tooltips)
+- Auto-save indicator (draft/saved)
+- Required field indicators (*)
+- Error message display with field highlighting
+- Success/confirmation messages
+- Undo/Revert changes button
+- Save progress warning on page leave
+
+HEADER & BREADCRUMB:
+- Breadcrumb: Dashboard > Agent > Section
+- Active agent indicator with status badge
+- Quick agent switcher (dropdown in header)
+- Agent creation button (+ New Agent)
+- Search/filter across agents
+
+RESPONSIVE DESIGN:
+- Desktop (1200px+): Full sidebar + main content
+- Tablet (768-1199px): Collapsible sidebar
+- Mobile (< 768px): Bottom sheet or modal selector for agent
+
+================================================================================
+SECTION 4: DATA FLOW & STATE MANAGEMENT
+================================================================================
+
+TREE NAVIGATION FLOW:
+1. User clicks agent in tree → Load agent profile + set active
+2. User clicks child menu → Navigate to agent/:agentId/section
+3. User expands/collapses agent → Toggle expand state in local storage
+4. User edits settings → Show unsaved indicator → Save to backend
+
+API ENDPOINTS REQUIRED:
+GET    /api/agents                    → List all agents with status
+GET    /api/agents/{agentId}          → Full agent profile + settings
+POST   /api/agents                    → Create new agent
+PUT    /api/agents/{agentId}          → Update basic info
+PUT    /api/agents/{agentId}/profile  → Update sales profile
+PUT    /api/agents/{agentId}/keywords → Update targeting keywords
+PUT    /api/agents/{agentId}/policy   → Update runtime policies
+DELETE /api/agents/{agentId}          → Archive/delete agent
+
+FORM STATE MANAGEMENT:
+- Use React Hook Form for complex forms
+- Implement optimistic updates with rollback on error
+- Persist form drafts to localStorage
+- Show conflict warning if backend updated while editing
+
+================================================================================
+SECTION 5: VISUAL DESIGN GUIDELINES
+================================================================================
+
+COLOR SCHEME (Tree View & Menus):
+- Active Agent: Highlight background (#F0F4FF / dark mode equivalent)
+- Active Menu Item: Bold text + left border accent
+- Agent Status Badge:
+  * Active: Green (#10B981)
+  * Paused: Yellow (#F59E0B)
+  * Archived: Gray (#6B7280)
+- Focus States: Blue outline (2px)
+
+TYPOGRAPHY:
+- Agent Names: Bold, 14px
+- Menu Items: Regular, 13px
+- Section Headers: Bold, 16px
+- Help Text: Regular, 12px, gray (secondary color)
+
+SPACING & LAYOUT:
+- Tree node padding: 8px 12px
+- Menu item padding: 10px 16px
+- Indent per level: 16px
+- Form label margin: 12px bottom
+- Input field height: 36px
+- Button padding: 8px 16px
+
+ICONS & VISUAL ELEMENTS:
+- Collapse/expand icon: ChevronDown/ChevronRight (animated)
+- Agent icon: Building/Users icon
+- Menu icons: BarChart3 (Dashboard), Users (Companies), TrendingUp (Prospects), Target (Lead Sources), Settings
+- Status icons: Circle badge with color
+- Help icon: Info circle with hover tooltip
+
+================================================================================
+SECTION 6: IMPLEMENTATION PRIORITIES
+================================================================================
+
+PHASE 1 - Core Navigation Tree (Week 1):
+1. Implement TreeView component in React
+2. Replace current flat navigation with hierarchical structure
+3. Add expand/collapse functionality
+4. Implement active state tracking
+5. Add responsive behavior
+6. Add Dashboard menu item as first child in each agent
+
+PHASE 2 - Basic Forms (Week 2):
+1. Agent basic information form
+2. Sales profile form
+3. Form validation & error handling
+4. API integration & error handling
+
+PHASE 3 - Advanced Forms (Week 3):
+1. Keyword configuration form with table
+2. Runtime policy form with sliders
+3. Channel & communication policy form
+4. Draft saving & conflict resolution
+
+PHASE 4 - Polish & Testing (Week 4):
+1. Accessibility (ARIA labels, keyboard navigation)
+2. Performance optimization (lazy loading)
+3. Cross-browser testing
+4. Mobile responsiveness refinement
+5. E2E testing
+
+================================================================================
+SECTION 7: EDGE CASES & ERROR HANDLING
+================================================================================
+
+TREE INTERACTION EDGE CASES:
+- Agent deleted while user browsing its child page → Redirect to dashboard
+- Navigation to non-existent agent/:agentId → 404 redirect
+- Multiple tabs open → Sync agent selection across tabs
+- Network failure while loading agents → Show error + retry button
+- Agent profile updated by another user → Show conflict dialog
+
+FORM SUBMISSION EDGE CASES:
+- Concurrent form submissions → Disable submit button, show spinner
+- Server validation error → Display field-specific error messages
+- Required field validation → Prevent submission, highlight fields
+- Form dirty state on navigation → Confirm before leaving
+- Keyword duplicate → Show warning + suggestion to update existing
+
+================================================================================
+SECTION 8: ACCESSIBILITY & KEYBOARD NAVIGATION
+================================================================================
+
+WCAG 2.1 Level AA Compliance:
+- Semantic HTML (nav, main, aside tags)
+- ARIA labels for all interactive elements
+- Keyboard navigation:
+  * Tab: Move between tree items
+  * Enter/Space: Expand/collapse agent
+  * Arrow Up/Down: Navigate between agents
+  * Arrow Left/Right: Expand/collapse siblings
+  * Escape: Close modals/menus
+
+SCREEN READER SUPPORT:
+- aria-expanded for tree nodes
+- aria-current="page" for active item
+- aria-label for icon buttons
+- Form field labels properly associated
+- Alert announcements for validation errors
+
+================================================================================
+SECTION 9: TESTING REQUIREMENTS
+================================================================================
+
+UNIT TESTS:
+- TreeView expand/collapse logic
+- Form validation functions
+- Active state calculations
+- Keyboard navigation handlers
+
+INTEGRATION TESTS:
+- Tree navigation → page load
+- Form submission → API call → success/error
+- Agent switching → data refresh
+- Draft saving & retrieval
+
+E2E TESTS (Cypress/Playwright):
+- Full user flow: Login → Select agent → Navigate to Companies → Edit settings
+- Form submission with validation
+- Multi-agent scenario
+- Mobile responsive navigation
+
+PERFORMANCE TESTS:
+- Tree render time (50+ agents)
+- Form interaction latency
+- Navigation animation smoothness
+- Memory profiling
+
+================================================================================
+END OF SYSTEM PROMPT
+================================================================================

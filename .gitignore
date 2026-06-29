@@ -1,0 +1,48 @@
+# ==========================
+# Python
+# ==========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual Environments
+venv/
+.venv/
+ENV/
+env/
+
+# Environment Variables
+.env
+.env.*
+!.env.example
+
+# Node.js
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# Logs
+*.log
+
+# Build
+dist/
+build/
+
+# Python Cache
+.pytest_cache/
+.mypy_cache/
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Temporary Files
+*.tmp
+*.bak
+
+# Word Documents
+*.docx

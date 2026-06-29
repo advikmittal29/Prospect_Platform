@@ -1,0 +1,45 @@
+Generate one outreach message using the context below.
+
+=== SELLER IDENTITY ===
+{persona_block}
+
+Seller name: {seller_name}
+Business name: {business_name}
+Channel required: {channel}
+
+=== TARGETING KEYWORDS ===
+{keyword_block}
+
+=== PROSPECT + COMPANY ===
+Prospect name: {prospect_name}
+Prospect title: {prospect_title}
+Prospect location: {prospect_location}
+Connection degree: {connection_degree}
+Role bucket: {role_bucket}
+Company: {company_name}
+Industry: {company_industry}
+Company size: {company_size}
+
+=== DOSSIER INTELLIGENCE ===
+Role summary: {role_summary}
+Relevance bucket: {relevance_bucket}
+Relevance score: {relevance_score}
+Relevance verdict: {relevance_verdict}
+Key signal: {key_signal}
+Suggested angle: {suggested_angle}
+About snippet: {about_snippet}
+
+=== RECENT LINKEDIN ACTIVITY ===
+The posts below are original posts only (reposts and reshares have been excluded).
+Each post is labelled with its recency — only use posts marked RECENT as outreach triggers.
+Do NOT reference posts marked OLD.
+
+{recent_posts_context}
+
+Message objectives:
+1) Lead with a specific business-relevant insight derived from the prospect's role, company, or recent activity.
+2) If a RECENT post exists, use it as a personalisation hook — reference what the prospect actually wrote, not generic praise.
+3) Tie value to outcomes this buyer would care about for {service_offering}.
+4) If targeting keywords include skills or job titles relevant to this prospect, reference them naturally — do not list them mechanically.
+5) Keep it crisp and high-conviction.
+6) End with one low-friction CTA aligned with the sales objective: {sales_objective}

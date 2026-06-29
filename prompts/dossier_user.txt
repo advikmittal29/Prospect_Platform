@@ -1,0 +1,62 @@
+Assess this B2B opportunity context and produce the dossier JSON.
+
+=== AGENT PERSONA ===
+{persona_block}
+
+=== GO-TO-MARKET CONTEXT ===
+Domain focus: {domain_focus}
+Service offering: {service_offering}
+Target buyers: {target_buyer_roles}
+Sales objective: {sales_objective}
+Desired business outcomes: {value_outcomes}
+
+=== TARGETING KEYWORDS ===
+{keyword_block}
+
+=== COMPANY CONTEXT ===
+Name: {company_name}
+LinkedIn: {company_linkedin}
+Industry: {company_industry}
+Size: {company_size}
+Location: {company_location}
+Tagline: {company_tagline}
+
+=== PROSPECT CONTEXT ===
+Name: {prospect_name}
+LinkedIn: {prospect_linkedin}
+Headline: {prospect_headline}
+Location: {prospect_location}
+Connection Degree: {prospect_connection_degree}
+Current Title (experience): {prospect_current_title}
+Current Company (experience): {prospect_current_company}
+Tenure Hint: {prospect_tenure_hint}
+Role Bucket: {prospect_role_bucket}
+
+=== PROFILE INTELLIGENCE ===
+Profile Summary: {profile_summary}
+Top Experiences: {top_experiences}
+Recent Posts: {recent_posts}
+
+=== SCORING INPUTS ===
+Search Confidence: {search_confidence}
+Company Match Confidence: {company_match_confidence}
+Outreach Feasibility: {outreach_feasibility_score}
+Contact Relevance Score: {contact_relevance_score}
+Contact Relevance Bucket: {contact_relevance_bucket}
+Message Available: {message_available}
+Connect Available: {connect_available}
+Contact Info Available: {contact_info_available}
+
+=== ABOUT TEXT (TRUNCATED) ===
+{about_text}
+
+=== HEURISTIC SIGNALS ===
+Reasons: {assessment_reasons}
+Warnings: {assessment_warnings}
+
+Focus your reasoning on:
+1) Urgency and timing signals in the business context that align with the targeting keywords.
+2) Decision influence and buying relevance for {service_offering}.
+3) Value leverage: which of the desired outcomes ({value_outcomes}) apply here?
+4) Outreach path practicality given connection degree and availability.
+5) Any signals (role, hiring activity, company stage) that match the target buyer criteria.
