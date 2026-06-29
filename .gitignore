@@ -12,6 +12,8 @@ venv/
 ENV/
 env/
 
+sql/update_app_settings_from_env.sql
+
 # Environment Variables
 .env
 .env.*
