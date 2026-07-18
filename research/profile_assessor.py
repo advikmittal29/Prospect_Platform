@@ -255,24 +255,39 @@ class LinkedInProfileAssessor:
     # ------------------------------------------------------------------
 
     def _extract_profile_data(self) -> dict:
+        # NOTE: LinkedIn rebuilt the profile page on a "SDUI" (server-driven UI)
+        # component system with fully hashed/generated CSS class names (no more
+        # stable classes like .pv-text-details__left-panel, no <h1> at all) —
+        # the same obfuscation pattern documented for the messaging UI in
+        # CLAUDE.md. The only stable hooks left are the `componentkey`
+        # attribute (contains semantic names like "...Topcard") and plain tag
+        # names/DOM order within it, so extraction is structural rather than
+        # class-based: name is the topcard's <h2>, then the remaining <p> tags
+        # in order are [connection-degree badge(s)?, headline, company, location].
         return self.page.evaluate(
             """
             () => {
               function clean(s){return(s||'').replace(/\\s+/g,' ').trim();}
               function has(sel){return document.querySelector(sel)!==null;}
 
-              const nameEl=document.querySelector('.pv-text-details__left-panel h1,.text-heading-xlarge');
-              const pronounsEl=document.querySelector('.pv-text-details__left-panel .text-body-small:not(.break-words)');
-              const headlineEl=document.querySelector('.pv-text-details__left-panel .text-body-medium.break-words,.pv-text-details__left-panel [data-field="headline"]');
-              const locationEl=document.querySelector('.pv-text-details__left-panel .text-body-small.inline.t-black--light');
-              const degreeEl=document.querySelector('.pv-text-details__left-panel .dist-value,.distance-badge');
+              const topcard=document.querySelector('[componentkey*="Topcard"]');
 
-              const summaryItems=[...document.querySelectorAll('.pv-text-details__right-panel-item-text,.pv-text-details__left-panel .mt1 span')];
-              let currentTitleTopcard=null,currentCompanyTopcard=null;
-              if(summaryItems.length>0){currentTitleTopcard=clean(summaryItems[0].innerText);}
-              if(summaryItems.length>1){currentCompanyTopcard=clean(summaryItems[1].innerText);}
+              const nameEl=topcard?topcard.querySelector('h2'):null;
+              const pTexts=topcard
+                ?[...topcard.querySelectorAll('p')].map(p=>clean(p.innerText)).filter(t=>t&&t!=='\\u00b7')
+                :[];
 
-              const expSection=document.querySelector('#experience~div,section[id*="experience"],#experience');
+              let i=0;
+              let degree=null;
+              while(i<pTexts.length && /(1st|2nd|3rd)\\s*$/i.test(pTexts[i])){
+                degree=pTexts[i];
+                i++;
+              }
+              const headline=pTexts[i]||null; if(pTexts[i]!==undefined){i++;}
+              const currentCompanyTopcard=pTexts[i]||null; if(pTexts[i]!==undefined){i++;}
+              const location=pTexts[i]||null;
+
+              const expSection=document.querySelector('[componentkey*="Experience" i],#experience~div,section[id*="experience"],#experience');
               let currentTitleExp=null,currentCompanyExp=null,tenureHint=null;
               const experiences=[];
               if(expSection){
@@ -301,13 +316,14 @@ class LinkedInProfileAssessor:
                 }
               }
 
-              const aboutSection=document.querySelector('#about~div,section[id*="about"] .inline-show-more-text,section[id*="about"] .pv-about__summary-text');
-              const aboutText=aboutSection?clean(aboutSection.innerText):null;
+              const aboutSection=document.querySelector('[componentkey*="About" i],#about~div,section[id*="about"] .inline-show-more-text,section[id*="about"] .pv-about__summary-text');
+              let aboutText=aboutSection?clean(aboutSection.innerText):null;
+              if(aboutText){aboutText=aboutText.replace(/^About\\s*/i,'').trim();}
 
-              const buttons=[...document.querySelectorAll('button,a[data-control-name]')];
+              const buttons=[...document.querySelectorAll('button,a[data-control-name],a[href]')];
               const buttonTexts=buttons.map(b=>(b.innerText||b.getAttribute('aria-label')||'').toLowerCase().trim());
-              const messageAvail=buttonTexts.some(t=>t.includes('message'));
-              const connectAvail=buttonTexts.some(t=>t.includes('connect'));
+              const messageAvail=buttonTexts.some(t=>t==='message'||t.startsWith('message '));
+              const connectAvail=buttonTexts.some(t=>t==='connect'||t.startsWith('connect '));
               const contactInfoAvail=has('a[href*="contact-info"],#contact-info,section[id*="contact"]');
 
               const openToWork=has('.pv-open-to-work-typeahead-text,.open-to-work-status-indicator,[data-test-id*="open-to-work"]');
@@ -315,11 +331,11 @@ class LinkedInProfileAssessor:
 
               return{
                 name:nameEl?clean(nameEl.innerText):null,
-                pronouns:pronounsEl?clean(pronounsEl.innerText):null,
-                connection_degree:degreeEl?clean(degreeEl.innerText):null,
-                headline:headlineEl?clean(headlineEl.innerText):null,
-                location:locationEl?clean(locationEl.innerText):null,
-                current_title_topcard:currentTitleTopcard,
+                pronouns:null,
+                connection_degree:degree,
+                headline:headline,
+                location:location,
+                current_title_topcard:null,
                 current_company_topcard:currentCompanyTopcard,
                 current_title_experience:currentTitleExp,
                 current_company_experience:currentCompanyExp,

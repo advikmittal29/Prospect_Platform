@@ -117,7 +117,7 @@ Key variables:
 | Variable | Default | Purpose |
 |---|---|---|
 | `DB_URL` | Windows Auth to localhost/ProspectDB | SQLAlchemy connection string |
-| `LLM_API_KEY` |  | OpenAI secret key |
+| `LLM_API_KEY` |  | OpenAI secret key | 
 | `LLM_MODEL` | `gpt-4o-mini` | OpenAI model to use |
 | `INGEST_KEYWORDS` | `AI Engineer,...` | Comma-separated Naukri search keywords |
 | `INGEST_LOCATION` | _(empty)_ | Default location filter for Naukri |

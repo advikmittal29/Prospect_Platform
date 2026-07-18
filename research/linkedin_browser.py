@@ -190,12 +190,21 @@ class LinkedInBrowser:
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self._active_credential_id: Optional[int] = None
+        self._owns_page: bool = False
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def start(self) -> None:
+    def start(self, *, new_page: bool = False) -> None:
+        """
+        Attach to Chrome over CDP.
+
+        new_page=False (default): reuse the first existing tab — original behavior.
+        new_page=True: open a dedicated new tab for this instance (used by the
+        reply handler's parallel workers so each worker drives its own tab).
+        The dedicated tab is closed again in stop().
+        """
         if self.browser:
             return
         self._pw = sync_playwright().start()
@@ -206,11 +215,27 @@ class LinkedInBrowser:
         self.context.set_default_timeout(self._cfg.action_timeout_ms)
         self.context.set_default_navigation_timeout(self._cfg.navigation_timeout_ms)
 
-        pages = self.context.pages
-        self.page = pages[0] if pages else self.context.new_page()
-        logger.info("LinkedInBrowser attached to CDP at %s", self._cfg.url)
+        if new_page:
+            self.page = self.context.new_page()
+            self._owns_page = True
+        else:
+            pages = self.context.pages
+            self.page = pages[0] if pages else self.context.new_page()
+        logger.info(
+            "LinkedInBrowser attached to CDP at %s%s",
+            self._cfg.url,
+            " (dedicated tab)" if new_page else "",
+        )
 
     def stop(self) -> None:
+        # Close our dedicated tab (if we created one) before disconnecting,
+        # so parallel workers don't leave orphan tabs piling up in Chrome.
+        if self._owns_page and self.page is not None:
+            try:
+                self.page.close()
+            except Exception:
+                pass
+            self._owns_page = False
         try:
             if self.browser:
                 self.browser.close()

@@ -1,0 +1,15 @@
+#cd app-ui\frontend
+#npm run dev
+
+#python -m uvicorn app.main:app --app-dir app-ui/backend --host 0.0.0.0 --port 8000 --reload
+
+Find a prospect ID:
+SELECT id, name, linkedin_profile_url FROM prospects;
+
+Clear ONE person (by prospect ID) — so you can re-initiate with them:
+DELETE FROM linkedin_conversations WHERE prospect_id = 5;
+DELETE FROM prospects WHERE id = 5;
+
+Clear ALL prospects — so the bot treats everyone as new:
+DELETE FROM linkedin_conversations;
+DELETE FROM prospects;

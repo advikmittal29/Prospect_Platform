@@ -468,8 +468,11 @@ svg { display:block; flex-shrink:0; }
   background:var(--surface); color:var(--text-tertiary);
   cursor:pointer; transition:all 150ms; padding:0; box-shadow:var(--shadow-xs);
 }
-.btn-icon:hover { background:var(--bg-subtle); color:var(--text-primary); border-color:var(--border-strong); }
-.btn-icon.danger:hover { background:var(--danger-soft); color:var(--danger); border-color:var(--danger-border); }
+.btn-icon:hover:not(:disabled) { background:var(--bg-subtle); color:var(--text-primary); border-color:var(--border-strong); }
+.btn-icon.danger:hover:not(:disabled) { background:var(--danger-soft); color:var(--danger); border-color:var(--danger-border); }
+/* Without this a disabled icon button is visually identical to an enabled one
+   and silently swallows clicks — it must read as unavailable, not broken. */
+.btn-icon:disabled { opacity:0.38; cursor:not-allowed; box-shadow:none; }
 [data-theme="dark"] .btn-icon {
   background:var(--surface-raised); border-color:var(--border); color:var(--text-tertiary);
 }

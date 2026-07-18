@@ -1,4 +1,6 @@
-export type PipelineType = "ingest" | "research" | "intelligence" | "candidate_hunt";
+export type PipelineType =
+  | "ingest" | "research" | "intelligence" | "candidate_hunt" | "rag_ingest"
+  | "reply_check" | "reply_check_manual" | "linkedin_manual_send";
 
 export interface DashboardSummary {
   metrics: Record<string, number>;
@@ -84,9 +86,37 @@ export interface ProspectRow {
   outreach_dispatch_attempts?: number;
   outreach_sent_at_utc?: string;
   assessed_at_utc?: string;
+  outreach_sent?: boolean | number;
+  // True when outreach_message holds non-empty text — drives the row Send button.
+  // The text itself is not shipped with the list; the send endpoint reads it server-side.
+  has_outreach_message?: boolean;
+  // LinkedIn conversation tracking (joined from linkedin_conversations)
+  conversation_status?: string | null;
+  lead_stage?: string | null;
+  handoff_reason?: string | null;
+  handoff_email_sent?: boolean | number | null;
+  last_reply_received_utc?: string | null;
+  conv_messages_sent?: number | null;
+  conv_messages_received?: number | null;
+  // Derived dashboard remark: email_sent | handed_off | not_interested |
+  // meeting_booked | closed | talking | in_process | not_contacted
+  engagement_status?: string;
+}
+
+export interface ProspectConversation {
+  conversation_status?: string | null;
+  lead_stage?: string | null;
+  handoff_reason?: string | null;
+  handoff_email_sent?: boolean | number | null;
+  handed_off_at_utc?: string | null;
+  messages_sent?: number | null;
+  messages_received?: number | null;
+  last_reply_received_utc?: string | null;
+  last_checked_utc?: string | null;
 }
 
 export interface ProspectDetail extends ProspectRow {
+  conversation?: ProspectConversation | null;
   about_text?: string;
   tenure_hint?: string;
   assessment_reasons_json?: string;
@@ -233,6 +263,27 @@ export type PagedProspects   = PagedResponse<ProspectRow>;
 export type PagedRuns        = PagedResponse<PipelineRun>;
 export type PagedKeywords    = PagedResponse<KeywordRow>;
 export type PagedCandidates  = PagedResponse<CandidateProfileRow>;
+
+export interface IngestionRun {
+  id: number;
+  source: string;
+  target_url?: string | null;
+  status: "running" | "completed" | "failed";
+  stage?: "crawling" | "embedding" | null;
+  pages_crawled: number;
+  pages_in_queue: number;
+  chunks_created: number;
+  chunks_embedded: number;
+  chunks_stored?: number | null;
+  progress_pct: number;
+  eta_seconds?: number | null;
+  error_text?: string | null;
+  triggered_by?: string | null;
+  started_at_utc?: string;
+  ended_at_utc?: string;
+}
+
+export type PagedIngestionRuns = PagedResponse<IngestionRun>;
 
 // ─── Ingestion config record ────────────────────────────────────────────
 export interface KeywordRow {

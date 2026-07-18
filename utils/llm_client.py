@@ -60,14 +60,18 @@ def _call_provider(
         return resp.choices[0].message.content or ""
 
     if provider == "gemini":
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        m = genai.GenerativeModel(
-            model_name=model,
-            system_instruction=system,
-            generation_config={"temperature": temperature, "max_output_tokens": max_tokens},
+        from google import genai as _genai
+        from google.genai import types as _genai_types
+        client = _genai.Client(api_key=api_key)
+        resp = client.models.generate_content(
+            model=model,
+            contents=user,
+            config=_genai_types.GenerateContentConfig(
+                system_instruction=system,
+                temperature=temperature,
+                max_output_tokens=max_tokens,
+            ),
         )
-        resp = m.generate_content(user)
         return resp.text or ""
 
     if provider == "groq":

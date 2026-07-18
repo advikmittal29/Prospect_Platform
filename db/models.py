@@ -584,6 +584,8 @@ _REQUIRED_TABLES = frozenset({
     "candidate_profiles",
     "ui_users",
     "pipeline_runs",
+    "linkedin_conversations",
+    "ingestion_runs",
 })
 
 
@@ -824,8 +826,6 @@ def seed_default_keywords(config_keywords: list[str], location: Optional[str]) -
 
 # ---------------------------------------------------------------------------
 # LinkedIn conversation threading table
-# Paste this class at the bottom of db/models.py
-# Also add "linkedin_conversations" to _REQUIRED_TABLES set
 # ---------------------------------------------------------------------------
 
 class LinkedInConversationORM(Base):
@@ -867,9 +867,27 @@ class LinkedInConversationORM(Base):
     last_reply_received_utc: Mapped[Optional[datetime]] = mapped_column(DateTime)
     last_checked_utc:        Mapped[Optional[datetime]] = mapped_column(DateTime)
 
-    # Queued reply (generated but not yet sent — for future semi-auto mode)
+    # DEPRECATED — dead columns, quarantined (audit fix F). Nothing in the
+    # codebase reads or writes these; they exist only because the live MySQL
+    # table has them (sql/add_conversations.sql). Do not use for new work —
+    # removing them is a schema change (models + init_db + manual migration).
     pending_reply_text:          Mapped[Optional[str]]      = mapped_column(Text)
     pending_reply_generated_utc: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+    # Human handoff — set when the bot detects real interest, hits its reply cap,
+    # or the classifier defaults to handoff on error. Once set, conversation_status
+    # is also flipped to 'handed_off' so _load_active_conversations (status=='active')
+    # naturally excludes the row from all future polls.
+    handed_off_at_utc:  Mapped[Optional[datetime]] = mapped_column(DateTime)
+    handoff_reason:      Mapped[Optional[str]]      = mapped_column(String(255))
+    handoff_email_sent:  Mapped[bool]               = mapped_column(Boolean, nullable=False, default=False)
+
+    # Reply-cadence bookkeeping
+    bot_reply_count:          Mapped[int]           = mapped_column(Integer, nullable=False, default=0)
+    answered_question_count:  Mapped[int]           = mapped_column(Integer, nullable=False, default=0)
+    # live | batch — whether the prospect appears to be actively engaged right now
+    conversation_mode:        Mapped[str]            = mapped_column(String(20), nullable=False, default="batch")
+    last_live_detected_utc:   Mapped[Optional[datetime]] = mapped_column(DateTime)
 
     last_error:  Mapped[Optional[str]] = mapped_column(Text)
     error_count: Mapped[int]           = mapped_column(Integer, nullable=False, default=0)
@@ -908,3 +926,69 @@ class LinkedInConversationORM(Base):
             "ts":   datetime.now(timezone.utc).isoformat(),
         })
         self.thread_json = json.dumps(thread)
+
+    def count_our_messages_since(self, cutoff_utc: datetime) -> int:
+        """
+        Count 'us' messages in thread_json with a parseable ts at/after cutoff_utc.
+
+        Messages flagged "live": true (sent inside one real-time live session)
+        are excluded — the 24h cap governs batch replies, and ending a live chat
+        mid-conversation because of it would look worse than the extra messages.
+        """
+        count = 0
+        for msg in self.get_thread():
+            if msg.get("role") != "us":
+                continue
+            if msg.get("live"):
+                continue
+            ts_raw = msg.get("ts")
+            if not ts_raw:
+                continue
+            try:
+                ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+            except Exception:
+                continue
+            if ts >= cutoff_utc:
+                count += 1
+        return count
+
+
+# ---------------------------------------------------------------------------
+# RAG website ingestion run history
+# ---------------------------------------------------------------------------
+
+class IngestionRunORM(Base):
+    """One row per website-ingestion (crawl -> chunk -> embed -> store) run."""
+    __tablename__ = "ingestion_runs"
+    __table_args__ = (
+        Index("ix_ingestion_runs_started_at", "started_at_utc"),
+        Index("ix_ingestion_runs_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    source:     Mapped[str]           = mapped_column(String(100), nullable=False, default="website")
+    target_url: Mapped[Optional[str]] = mapped_column(String(500))
+
+    # running | completed | failed
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="running")
+    # crawling | embedding
+    stage:  Mapped[Optional[str]] = mapped_column(String(30))
+
+    pages_crawled:   Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pages_in_queue:  Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    chunks_created:  Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    chunks_embedded: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    chunks_stored:   Mapped[Optional[int]] = mapped_column(Integer)
+
+    progress_pct: Mapped[float]           = mapped_column(Float, nullable=False, default=0.0)
+    eta_seconds:  Mapped[Optional[int]]   = mapped_column(Integer)
+    error_text:   Mapped[Optional[str]]   = mapped_column(Text)
+    triggered_by: Mapped[Optional[str]]   = mapped_column(String(100))
+
+    started_at_utc: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+    ended_at_utc: Mapped[Optional[datetime]] = mapped_column(DateTime)

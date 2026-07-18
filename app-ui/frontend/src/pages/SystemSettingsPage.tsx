@@ -97,8 +97,16 @@ const CATEGORIES: Category[] = [
     label: "Outreach",
     icon: "zap",
     color: "var(--amber)",
-    prefix: ["OUTREACH_"],
+    prefix: ["OUTREACH_", "LINKEDIN_OUTREACH_"],
     description: "Recruiter identity, channel selection, and test mode settings",
+  },
+  {
+    id: "reply",
+    label: "Reply Automation",
+    icon: "refresh",
+    color: "var(--emerald)",
+    prefix: ["REPLY_"],
+    description: "Sweep cadence, handoff caps, concurrency, quality gate, and live-session pacing",
   },
   {
     id: "smtp",
@@ -106,6 +114,7 @@ const CATEGORIES: Category[] = [
     icon: "key",
     color: "var(--danger)",
     prefix: ["SMTP_"],
+    keys: ["REPLY_HANDOFF_MANAGER_EMAIL"],
     description: "SMTP server, credentials, and TLS settings for email dispatch",
   },
   // {
@@ -119,6 +128,12 @@ const CATEGORIES: Category[] = [
 
 function categorizeSetting(key: string): string {
   const upper = key.toUpperCase();
+
+  // An explicit `keys` listing pins a setting to a category regardless of its prefix.
+  for (const cat of CATEGORIES) {
+    if (cat.keys?.includes(upper)) return cat.id;
+  }
+
   for (const cat of CATEGORIES) {
     if (!cat.prefix) continue;
     if (cat.prefix.some((p) => upper.startsWith(p))) return cat.id;
@@ -567,6 +582,7 @@ function CategorySettingsPanel({ categoryId }: { categoryId: string }) {
   const [saving, setSaving] = useState<string | null>(null);
   const [successKey, setSuccessKey] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     setLoading(true);
@@ -586,10 +602,18 @@ function CategorySettingsPanel({ categoryId }: { categoryId: string }) {
 
   const save = async (s: SettingRow) => {
     const key = s.setting_key;
+    const rawVal = edits[key] ?? "";
+
+    const problem = validateSetting(key, rawVal);
+    if (problem) {
+      setFieldErrors((p) => ({ ...p, [key]: problem }));
+      return;
+    }
+    setFieldErrors((p) => { const n = { ...p }; delete n[key]; return n; });
+
     setSaving(key);
     setError("");
     try {
-      const rawVal = edits[key] ?? "";
       const parsedValue = parseSettingValue(rawVal, s.config_type);
       await upsertSetting(key, parsedValue, s.description ?? undefined);
       setSuccessKey(key);
@@ -657,6 +681,7 @@ function CategorySettingsPanel({ categoryId }: { categoryId: string }) {
               isFirst={i === 0}
               isSaving={saving === s.setting_key}
               isSaved={successKey === s.setting_key}
+              fieldError={fieldErrors[s.setting_key]}
               onChange={(v) => setEdits((p) => ({ ...p, [s.setting_key]: v }))}
               onSave={() => void save(s)}
             />
@@ -669,13 +694,14 @@ function CategorySettingsPanel({ categoryId }: { categoryId: string }) {
 
 /* ─── Individual setting row ─────────────────────────────────────── */
 function SettingRow({
-  setting, value, isFirst, isSaving, isSaved, onChange, onSave,
+  setting, value, isFirst, isSaving, isSaved, fieldError, onChange, onSave,
 }: {
   setting: SettingRow;
   value: string;
   isFirst: boolean;
   isSaving: boolean;
   isSaved: boolean;
+  fieldError?: string;
   onChange: (v: string) => void;
   onSave: () => void;
 }) {
@@ -744,8 +770,16 @@ function SettingRow({
             value={value}
             onChange={(e) => onChange(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && onSave()}
-            style={{ fontSize: "0.83rem", fontFamily: "var(--font-mono)" }}
+            style={{
+              fontSize: "0.83rem", fontFamily: "var(--font-mono)",
+              ...(fieldError ? { borderColor: "var(--danger)" } : {}),
+            }}
           />
+        )}
+        {fieldError && (
+          <div style={{ fontSize: "0.7rem", color: "var(--danger)", marginTop: 5, lineHeight: 1.4 }}>
+            {fieldError}
+          </div>
         )}
       </div>
 
@@ -775,6 +809,20 @@ function valueToString(v: unknown): string {
   if (typeof v === "string") return v;
   if (Array.isArray(v)) return v.join(", ");
   return JSON.stringify(v);
+}
+
+/* Mirrors the backend guard in upsert_setting so the floor is explained before
+   a round-trip. The scheduler clamps to 60s silently, so anything under a
+   minute would look saved while quietly running at a different cadence. */
+function validateSetting(key: string, raw: string): string | null {
+  if (key === "REPLY_CHECK_INTERVAL_MINUTES") {
+    const trimmed = raw.trim();
+    const n = Number(trimmed);
+    if (trimmed === "" || !Number.isFinite(n)) return "Enter a whole number of minutes.";
+    if (!Number.isInteger(n)) return "Must be a whole number of minutes.";
+    if (n < 1) return "Must be at least 1 — the scheduler enforces a 60-second floor.";
+  }
+  return null;
 }
 
 function parseSettingValue(raw: string, configType?: string | null): unknown {

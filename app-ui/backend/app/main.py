@@ -1,14 +1,16 @@
 ﻿from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
@@ -17,14 +19,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
-from agents import AgentConfigResolver
+
 from .database import ROOT_DIR, init_backend_db
-from .security import create_token, decode_token, verify_password
+
 
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
-
+from agents import AgentConfigResolver
+from .security import create_token, decode_token, verify_password
 from config import (  # noqa: E402
     get_config_type_for_key,
     get_non_secret_setting_catalog,
@@ -120,10 +124,27 @@ class LoginRequest(BaseModel):
 
 
 class RunRequest(BaseModel):
-    pipeline: Literal["ingest", "research", "intelligence", "candidate_hunt"]
+    pipeline: Literal["ingest", "research", "intelligence", "candidate_hunt", "rag_ingest"]
     agent_id: Optional[int] = None
     agent_key: Optional[str] = None
     runtime_mode: Optional[Literal["deterministic", "autonomous"]] = None
+
+
+class LinkedInSendRequest(BaseModel):
+    profile_url: str
+    message: str
+    agent_id: Optional[int] = None
+    agent_key: Optional[str] = None
+
+
+class ProspectMessageUpdate(BaseModel):
+    message: str
+
+
+class LinkedInGenerateRequest(BaseModel):
+    profile_url: str
+    agent_id: Optional[int] = None
+    agent_key: Optional[str] = None
 
 
 class KeywordUpsert(BaseModel):
@@ -190,13 +211,21 @@ class AgentKeywordUpsert(BaseModel):
 # ---------------------------------------------------------------------------
 
 @app.on_event("startup")
-def on_startup() -> None:
+async def on_startup() -> None:
     """
     Connect to the database and verify the schema exists.
     The application will refuse to start if init_db.py has not been run.
     """
     init_backend_db()
     logger.info("UI backend started. JWT_EXPIRE_HOURS=%d", JWT_EXPIRE_HOURS)
+    # Verify the pipeline interpreter in the background: this machine has TWO
+    # virtualenvs (.venv used for subprocesses, venv used manually), and a
+    # package installed into only one produces cryptic downstream failures.
+    # The check runs off the event loop; until it completes, subprocesses run
+    # as before.
+    asyncio.create_task(asyncio.to_thread(_run_pipeline_python_check))
+    asyncio.create_task(_reply_scheduler_loop())
+    logger.info("LinkedIn reply-check scheduler started (fires immediately, then on a config-driven interval).")
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +255,51 @@ def _resolve_agent_scope(
     agent_key: Optional[str] = None,
 ) -> int:
     return resolve_agent_id(agent_id=agent_id, agent_key=agent_key)
+
+
+_LINKEDIN_PROFILE_URL_RE = re.compile(
+    r"^https?://([a-z]{2,3}\.)?linkedin\.com/in/[a-zA-Z0-9\-_%]+/?(\?.*)?$"
+)
+
+
+def _extract_test_error(log_text: str) -> Optional[str]:
+    """Pull the 'error   : ...' line out of scheduler/p_outreach.py's TEST RESULT block."""
+    match = re.search(r"error\s*:\s*(.+)", log_text or "")
+    if not match:
+        return None
+    value = match.group(1).strip()
+    return value if value and value != "—" else None
+
+
+def _extract_test_action(log_text: str) -> Optional[str]:
+    """
+    Pull the executed action (message | connect | skip | unknown) out of
+    scheduler/p_outreach.py's TEST RESULT block. The argument echo earlier in
+    the log also prints an 'action : auto' line, so the LAST match wins —
+    that's the result line, logged after the action ran.
+    """
+    matches = re.findall(r"action\s*:\s*([A-Za-z_]+)", log_text or "")
+    return matches[-1].lower() if matches else None
+
+
+_LINKEDIN_GENERATE_RESULT_MARKER = "===LINKEDIN_GENERATE_RESULT==="
+
+
+def _extract_generate_result(log_text: str) -> Optional[Dict[str, Any]]:
+    """Pull the JSON result scheduler/p_linkedin_generate_message.py prints after its marker line."""
+    idx = (log_text or "").rfind(_LINKEDIN_GENERATE_RESULT_MARKER)
+    if idx == -1:
+        return None
+    tail = log_text[idx + len(_LINKEDIN_GENERATE_RESULT_MARKER):].strip()
+    for line in tail.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            return json.loads(line)
+        except Exception:
+            return None
+    return None
 
 
 def _auth_user(
@@ -838,6 +912,33 @@ def company_detail(
     return {"company": dict(company), "prospects": [dict(p) for p in prospects]}
 
 
+def _derive_engagement_status(
+    conv_status: Optional[str],
+    handoff_email_sent: Any,
+    messages_received: Any,
+    outreach_sent: Any,
+    dispatch_status: Optional[str],
+) -> str:
+    """
+    Collapse conversation + outreach state into one dashboard remark:
+    email_sent | handed_off | not_interested | meeting_booked | closed
+    | talking | in_process | not_contacted
+    """
+    if conv_status == "handed_off":
+        return "email_sent" if handoff_email_sent else "handed_off"
+    if conv_status == "not_interested":
+        return "not_interested"
+    if conv_status == "meeting_booked":
+        return "meeting_booked"
+    if conv_status == "closed":
+        return "closed"
+    if conv_status == "active":
+        return "talking" if (messages_received or 0) > 0 else "in_process"
+    if outreach_sent or (dispatch_status and dispatch_status not in ("not_sent", "pending")):
+        return "in_process"
+    return "not_contacted"
+
+
 @app.get("/api/prospects")
 def list_prospects(
     page: int = Query(1, ge=1),
@@ -889,9 +990,20 @@ def list_prospects(
                     p.profile_summary_text, p.dossier_status,
                     p.outreach_generated_at_utc, p.assessed_at_utc,
                     p.outreach_dispatch_status, p.outreach_dispatch_channel,
-                    p.outreach_dispatch_attempts, p.outreach_sent_at_utc
+                    p.outreach_dispatch_attempts, p.outreach_sent_at_utc,
+                    p.outreach_sent,
+                    -- Whether a message exists, not the text itself: the row Send
+                    -- button only needs to know if it has something to send, and
+                    -- the send endpoint reads the stored text server-side.
+                    (p.outreach_message IS NOT NULL AND TRIM(p.outreach_message) <> '')
+                        AS has_outreach_message,
+                    lc.conversation_status, lc.lead_stage, lc.handoff_reason,
+                    lc.handoff_email_sent, lc.last_reply_received_utc,
+                    lc.messages_sent AS conv_messages_sent,
+                    lc.messages_received AS conv_messages_received
                 FROM prospects p
                 LEFT JOIN company_research c ON c.id = p.company_research_id
+                LEFT JOIN linkedin_conversations lc ON lc.prospect_id = p.id
                 WHERE {where}
                 ORDER BY p.contact_relevance_score DESC, p.id DESC
                 LIMIT :limit OFFSET :offset
@@ -900,7 +1012,20 @@ def list_prospects(
             {**params, "limit": page_size, "offset": offset},
         ).mappings().all()
 
-    return {"items": [dict(r) for r in rows], "total": total, "page": page, "page_size": page_size}
+    items = []
+    for r in rows:
+        item = dict(r)
+        item["has_outreach_message"] = bool(item.get("has_outreach_message"))
+        item["engagement_status"] = _derive_engagement_status(
+            item.get("conversation_status"),
+            item.get("handoff_email_sent"),
+            item.get("conv_messages_received"),
+            item.get("outreach_sent"),
+            item.get("outreach_dispatch_status"),
+        )
+        items.append(item)
+
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
 @app.get("/api/prospects/{prospect_id}")
@@ -933,6 +1058,28 @@ def prospect_detail(
         item["dossier"] = _json_or_none(item.get("dossier_json"))
         item["outreach_message_json"] = _json_or_none(item.get("outreach_message"))
 
+        conv = session.execute(
+            text(
+                """
+                SELECT conversation_status, lead_stage, handoff_reason,
+                       handoff_email_sent, handed_off_at_utc,
+                       messages_sent, messages_received,
+                       last_reply_received_utc, last_checked_utc
+                FROM linkedin_conversations
+                WHERE prospect_id = :id
+                """
+            ),
+            {"id": prospect_id},
+        ).mappings().first()
+        item["conversation"] = dict(conv) if conv else None
+        item["engagement_status"] = _derive_engagement_status(
+            conv["conversation_status"] if conv else None,
+            conv["handoff_email_sent"] if conv else None,
+            conv["messages_received"] if conv else None,
+            item.get("outreach_sent"),
+            item.get("outreach_dispatch_status"),
+        )
+
     return item
 
 @app.patch("/api/prospects/{prospect_id}/outreach")
@@ -960,6 +1107,603 @@ def set_prospect_outreach_required(
         prospect_id, required, user,
     )
     return {"ok": True, "prospect_id": prospect_id, "outreach_required": required}
+
+
+@app.patch("/api/prospects/{prospect_id}/message")
+def update_prospect_message(
+    prospect_id: int,
+    payload: ProspectMessageUpdate,
+    user: str = Depends(_auth_user),
+) -> dict:
+    """
+    Overwrite a prospect's outreach message with a human-edited version.
+
+    outreach_generated_at_utc is deliberately left alone — it records when the
+    LLM drafted the message, and a manual edit is not a generation.
+    """
+    message = (payload.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Message text cannot be empty.")
+
+    with session_scope() as session:
+        row = session.execute(
+            text("SELECT id FROM prospects WHERE id = :id"), {"id": prospect_id}
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Prospect not found")
+        session.execute(
+            text("UPDATE prospects SET outreach_message = :m WHERE id = :id"),
+            {"m": message, "id": prospect_id},
+        )
+
+    logger.info(
+        "Prospect %d outreach message edited by user='%s' (%d chars).",
+        prospect_id, user, len(message),
+    )
+    return {"ok": True, "prospect_id": prospect_id, "outreach_message": message}
+
+
+@app.post("/api/prospects/{prospect_id}/generate-message")
+async def generate_prospect_message(prospect_id: int, user: str = Depends(_auth_user)) -> dict:
+    """
+    Generate an outreach message for ONE prospect on demand and store it.
+
+    This is the per-prospect equivalent of the Intelligence pipeline's message
+    step — for when you don't want to run the whole batch. It scrapes the
+    prospect's profile fresh and runs the same dossier -> outreach LLM pipeline
+    (via p_linkedin_generate_message.py, the same generator the LinkedIn tab
+    uses), then saves the result to prospects.outreach_message so it becomes
+    editable and sendable from the UI. Holds the shared CDP-Chrome lock.
+    """
+    with session_scope() as session:
+        row = session.execute(
+            text("SELECT id, agent_id, linkedin_profile_url FROM prospects WHERE id = :id"),
+            {"id": prospect_id},
+        ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Prospect not found")
+
+    url = (row["linkedin_profile_url"] or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="This prospect has no LinkedIn profile URL.")
+    if not _LINKEDIN_PROFILE_URL_RE.match(url):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Stored profile URL is not a valid LinkedIn profile URL: {url}",
+        )
+
+    if _linkedin_automation_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="LinkedIn automation is busy (a scheduled sweep or another action is running) — try again shortly.",
+        )
+
+    async with _linkedin_automation_lock:
+        run_id = _insert_pipeline_run(
+            "linkedin_manual_generate", row["agent_id"], user,
+            f"Generate message for prospect {prospect_id} ({url})",
+        )
+        cmd = [
+            _python_exe(), str(ROOT_DIR / "scheduler" / "p_linkedin_generate_message.py"),
+            "--url", url, "--agent-id", str(row["agent_id"]),
+        ]
+        returncode, out = await asyncio.to_thread(_run_subprocess_sync, cmd, 60 * 5)
+
+        if returncode != 0:
+            _update_run(run_id, status="failed", ended_at_utc=_now_utc(), message="Generation failed.", log_text=out)
+            detail = _extract_test_error(out) or "Could not generate a message for this prospect."
+            logger.warning("Message generation for prospect %d failed for user='%s': %s", prospect_id, user, detail)
+            raise HTTPException(status_code=422, detail=detail)
+
+        result = _extract_generate_result(out)
+        if result is None or not (result.get("message") or "").strip():
+            _update_run(run_id, status="failed", ended_at_utc=_now_utc(), message="Result could not be parsed.", log_text=out)
+            raise HTTPException(status_code=500, detail="Generation finished but no message could be read from the result.")
+
+        message = result["message"].strip()
+        _update_run(run_id, status="completed", ended_at_utc=_now_utc(), message="Message generated.", log_text=out)
+
+    with session_scope() as session:
+        session.execute(
+            text(
+                """
+                UPDATE prospects
+                SET outreach_message = :m,
+                    outreach_generated_at_utc = :now,
+                    dossier_status = CASE WHEN dossier_status IN ('completed','manual')
+                                          THEN dossier_status ELSE 'manual' END
+                WHERE id = :id
+                """
+            ),
+            {"m": message, "now": _now_utc(), "id": prospect_id},
+        )
+
+    logger.info("Message generated for prospect %d by user='%s' (%d chars).", prospect_id, user, len(message))
+    return {"ok": True, "prospect_id": prospect_id, "message": message, "run_id": run_id}
+
+
+@app.post("/api/prospects/{prospect_id}/send")
+async def send_prospect_message(prospect_id: int, user: str = Depends(_auth_user)) -> dict:
+    """
+    Send this prospect's stored outreach message over LinkedIn, on demand.
+
+    Sends whatever is in prospects.outreach_message right now — the AI draft or
+    the user's edit of it — so what the Outreach tab shows is exactly what goes
+    out. Independent of the p_outreach.py batch dispatch, but holds the same
+    shared CDP-Chrome lock so a scheduled sweep can never drive the browser at
+    the same moment. Fails fast with 409 rather than queueing behind it.
+    """
+    with session_scope() as session:
+        row = session.execute(
+            text(
+                """
+                SELECT id, agent_id, linkedin_profile_url, outreach_message
+                FROM prospects WHERE id = :id
+                """
+            ),
+            {"id": prospect_id},
+        ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Prospect not found")
+
+    url = (row["linkedin_profile_url"] or "").strip()
+    message = (row["outreach_message"] or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="This prospect has no LinkedIn profile URL.")
+    if not _LINKEDIN_PROFILE_URL_RE.match(url):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Stored profile URL is not a valid LinkedIn profile URL: {url}",
+        )
+    if not message:
+        raise HTTPException(
+            status_code=400,
+            detail="No outreach message to send. Run the Intelligence pipeline, or write one yourself.",
+        )
+
+    if _linkedin_automation_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="LinkedIn automation is busy (a scheduled sweep or another send is running) — try again shortly.",
+        )
+
+    async with _linkedin_automation_lock:
+        run_id = _insert_pipeline_run(
+            "linkedin_manual_send", row["agent_id"], user,
+            f"Manual send to prospect {prospect_id} ({url})",
+        )
+        # "auto" keeps the batch pipeline's behaviour: detect connection state and
+        # message-first, falling back to a connection request carrying the message
+        # as the invite note when direct messaging isn't available.
+        cmd = [
+            _python_exe(), str(ROOT_DIR / "scheduler" / "p_outreach.py"),
+            "--url", url, "--message", message, "--action", "auto",
+        ]
+        returncode, out = await asyncio.to_thread(_run_subprocess_sync, cmd, 60 * 10)
+
+        if returncode != 0:
+            detail = _extract_test_error(out) or "Send failed — LinkedIn automation could not deliver this message."
+            _update_run(run_id, status="failed", ended_at_utc=_now_utc(), message="Send failed.", log_text=out)
+            with session_scope() as session:
+                session.execute(
+                    text(
+                        """
+                        UPDATE prospects
+                        SET outreach_dispatch_status = 'failed',
+                            outreach_dispatch_attempts = outreach_dispatch_attempts + 1,
+                            outreach_attempts = outreach_attempts + 1,
+                            outreach_last_dispatch_at_utc = :now,
+                            outreach_dispatch_error = :err
+                        WHERE id = :id
+                        """
+                    ),
+                    {"now": _now_utc(), "err": detail[:500], "id": prospect_id},
+                )
+            logger.warning("Manual send for prospect %d failed for user='%s': %s", prospect_id, user, detail)
+            raise HTTPException(status_code=422, detail=detail)
+
+        action = _extract_test_action(out) or "message"
+        run_message = {
+            "message": "Message sent.",
+            "connect": "Not connected and no open-messaging path — connection request sent with the message as the invite note.",
+            "skip": "Nothing sent — a connection request to this profile is already pending.",
+        }.get(action, "Message sent.")
+        _update_run(run_id, status="completed", ended_at_utc=_now_utc(), message=run_message, log_text=out)
+
+    # A pending invite means NOTHING was sent — never mark it as sent.
+    if action == "skip":
+        logger.info("Manual send for prospect %d skipped (invite already pending).", prospect_id)
+        raise HTTPException(
+            status_code=409,
+            detail="Nothing sent — a connection request to this profile is already pending. "
+                   "Wait for them to accept before messaging.",
+        )
+
+    now = _now_utc()
+    with session_scope() as session:
+        session.execute(
+            text(
+                """
+                UPDATE prospects
+                SET outreach_sent = 1,
+                    outreach_status = 'sent',
+                    outreach_dispatch_status = 'sent',
+                    outreach_dispatch_channel = 'linkedin',
+                    outreach_dispatch_attempts = outreach_dispatch_attempts + 1,
+                    outreach_attempts = outreach_attempts + 1,
+                    outreach_last_dispatch_at_utc = :now,
+                    outreach_sent_at_utc = :now,
+                    outreach_dispatch_error = NULL
+                WHERE id = :id
+                """
+            ),
+            {"now": now, "id": prospect_id},
+        )
+
+    # Track the conversation so the reply scheduler follows up on their replies,
+    # exactly as the batch pipeline would.
+    from db.models import LinkedInConversationORM
+    from outreach.linkedin_reply_handler import LinkedInReplyHandler
+
+    conv_appended = False
+    with session_scope() as session:
+        conv = session.query(LinkedInConversationORM).filter_by(prospect_id=prospect_id).one_or_none()
+        if conv is not None:
+            conv.append_message("us", message)
+            conv.messages_sent = (conv.messages_sent or 0) + 1
+            conv.last_message_sent_utc = now
+            conv_appended = True
+    if not conv_appended:
+        LinkedInReplyHandler.create_conversation_for_prospect(
+            prospect_id=prospect_id,
+            agent_id=row["agent_id"],
+            linkedin_profile_url=url,
+            first_message_text=message,
+        )
+
+    logger.info(
+        "Manual send for prospect %d by user='%s' -> action=%s (conversation %s)",
+        prospect_id, user, action, "appended" if conv_appended else "created",
+    )
+    return {
+        "success": True,
+        "prospect_id": prospect_id,
+        "run_id": run_id,
+        "action": action,
+        "message": run_message,
+    }
+
+
+@app.post("/api/prospects/{prospect_id}/check-messages")
+async def check_prospect_messages(prospect_id: int, user: str = Depends(_auth_user)) -> dict:
+    """
+    Manual, ad-hoc reply check for one prospect. Independent of the backend's
+    fixed-interval reply scheduler — never shifts its cadence. Fails fast with
+    409 if the shared LinkedIn/CDP-Chrome automation lock is currently held by
+    a scheduled sweep or another manual action, rather than queueing behind it.
+    """
+    with session_scope() as session:
+        conv = session.execute(
+            text("SELECT id, agent_id FROM linkedin_conversations WHERE prospect_id = :pid"),
+            {"pid": prospect_id},
+        ).mappings().first()
+    if not conv:
+        raise HTTPException(
+            status_code=404,
+            detail="No tracked LinkedIn conversation for this prospect yet.",
+        )
+
+    if _linkedin_automation_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="LinkedIn automation is busy (a scheduled sweep or another action is running) — try again shortly.",
+        )
+
+    async with _linkedin_automation_lock:
+        run_id = _insert_pipeline_run(
+            "reply_check_manual", conv["agent_id"], user, f"Manual check for prospect {prospect_id}."
+        )
+        cmd = [_python_exe(), _pipeline_script("reply_check"), "--test-prospect-id", str(prospect_id)]
+        returncode, out = await asyncio.to_thread(_run_subprocess_sync, cmd, 60 * 10)
+        status = "completed" if returncode == 0 else "failed"
+        _update_run(
+            run_id,
+            status=status,
+            ended_at_utc=_now_utc(),
+            message="Manual check finished." if returncode == 0 else f"Exited with code {returncode}",
+            log_text=out,
+        )
+
+    logger.info("Manual reply check for prospect %d by user='%s' -> %s", prospect_id, user, status)
+    return {"ok": returncode == 0, "run_id": run_id, "log_tail": out[-2000:]}
+
+
+@app.post("/api/linkedin/generate-message")
+async def generate_linkedin_message(payload: LinkedInGenerateRequest, user: str = Depends(_auth_user)) -> dict:
+    """
+    Scrape the profile and draft a personalized first message via the same
+    dossier + outreach-message LLM pipeline used for regular prospects, so an
+    ad-hoc "LinkedIn" tab send isn't left to the user to write from scratch.
+    Returns a draft for the user to review/edit before sending — it is not sent here.
+    """
+    url = (payload.profile_url or "").strip()
+    if not _LINKEDIN_PROFILE_URL_RE.match(url):
+        raise HTTPException(
+            status_code=400,
+            detail="Not a valid LinkedIn profile URL (expected https://www.linkedin.com/in/<handle>/).",
+        )
+
+    resolved_agent_id = _resolve_agent_scope(agent_id=payload.agent_id, agent_key=payload.agent_key)
+
+    if _linkedin_automation_lock.locked():
+        raise HTTPException(status_code=409, detail="LinkedIn automation is busy — try again shortly.")
+
+    async with _linkedin_automation_lock:
+        run_id = _insert_pipeline_run(
+            "linkedin_manual_generate", resolved_agent_id, user, f"Generate message draft for {url}"
+        )
+        cmd = [
+            _python_exe(), str(ROOT_DIR / "scheduler" / "p_linkedin_generate_message.py"),
+            "--url", url, "--agent-id", str(resolved_agent_id),
+        ]
+        returncode, out = await asyncio.to_thread(_run_subprocess_sync, cmd, 60 * 5)
+
+        if returncode != 0:
+            _update_run(run_id, status="failed", ended_at_utc=_now_utc(), message="Generation failed.", log_text=out)
+            detail = _extract_test_error(out) or "Could not generate a message for this profile."
+            logger.warning("LinkedIn message generation for %s failed for user='%s': %s", url, user, detail)
+            raise HTTPException(status_code=422, detail=detail)
+
+        result = _extract_generate_result(out)
+        if result is None:
+            _update_run(run_id, status="failed", ended_at_utc=_now_utc(), message="Result could not be parsed.", log_text=out)
+            raise HTTPException(status_code=500, detail="Message generation finished but the result could not be read.")
+
+        _update_run(run_id, status="completed", ended_at_utc=_now_utc(), message="Message generated.", log_text=out)
+
+    logger.info("LinkedIn message draft generated for %s by user='%s'", url, user)
+    return {
+        "message": result.get("message", ""),
+        "name": result.get("name"),
+        "headline": result.get("headline"),
+        "current_company": result.get("current_company"),
+        "run_id": run_id,
+    }
+
+
+@app.post("/api/linkedin/send")
+async def send_linkedin_message(payload: LinkedInSendRequest, user: str = Depends(_auth_user)) -> dict:
+    """
+    Send a first LinkedIn message to an arbitrary profile URL (connection or
+    not — see the connect-fallback logic in linkedin_outreach_sender.py). On
+    success, auto-registers the recipient as a tracked prospect + conversation
+    so the reply scheduler picks up their replies like any other prospect.
+    """
+    url = (payload.profile_url or "").strip()
+    message = (payload.message or "").strip()
+
+    if not _LINKEDIN_PROFILE_URL_RE.match(url):
+        raise HTTPException(
+            status_code=400,
+            detail="Not a valid LinkedIn profile URL (expected https://www.linkedin.com/in/<handle>/).",
+        )
+    if not message:
+        raise HTTPException(status_code=400, detail="Message text is required.")
+
+    resolved_agent_id = _resolve_agent_scope(agent_id=payload.agent_id, agent_key=payload.agent_key)
+
+    if _linkedin_automation_lock.locked():
+        raise HTTPException(status_code=409, detail="LinkedIn automation is busy — try again shortly.")
+
+    async with _linkedin_automation_lock:
+        run_id = _insert_pipeline_run(
+            "linkedin_manual_send", resolved_agent_id, user, f"Manual send to {url}"
+        )
+        # "auto": detect connection state and message-first, falling back to a
+        # connection request (with the message as the invite note) when direct
+        # messaging isn't available — the same behavior as the batch pipeline.
+        # A forced "message" would disable that fallback (see run_test in
+        # outreach/linkedin_outreach_sender.py).
+        cmd = [
+            _python_exe(), str(ROOT_DIR / "scheduler" / "p_outreach.py"),
+            "--url", url, "--message", message, "--action", "auto",
+        ]
+        returncode, out = await asyncio.to_thread(_run_subprocess_sync, cmd, 60 * 10)
+
+        if returncode != 0:
+            _update_run(run_id, status="failed", ended_at_utc=_now_utc(), message="Send failed.", log_text=out)
+            detail = _extract_test_error(out) or "Send failed — LinkedIn automation could not deliver this message."
+            logger.warning("LinkedIn manual send to %s failed for user='%s': %s", url, user, detail)
+            raise HTTPException(status_code=422, detail=detail)
+
+        action = _extract_test_action(out) or "message"
+        run_message = {
+            "message": "Message sent.",
+            "connect": "Not connected and no open-messaging path — connection request sent with the message as the invite note.",
+            "skip": "Nothing sent — a connection request to this profile is already pending.",
+        }.get(action, "Message sent.")
+        _update_run(run_id, status="completed", ended_at_utc=_now_utc(), message=run_message, log_text=out)
+
+    # A pending invite means NOTHING was sent — surface that honestly instead
+    # of registering a prospect that was never actually contacted.
+    if action == "skip":
+        logger.info("LinkedIn manual send to %s skipped for user='%s' (invite already pending).", url, user)
+        raise HTTPException(
+            status_code=409,
+            detail="Nothing sent — a connection request to this profile is already pending. "
+                   "Wait for them to accept before messaging.",
+        )
+
+    def _find_prospect(session, company_id: int) -> Optional[int]:
+        row = session.execute(
+            text(
+                """
+                SELECT id FROM prospects
+                WHERE agent_id = :aid AND company_research_id = :cid AND linkedin_profile_url = :url
+                """
+            ),
+            {"aid": resolved_agent_id, "cid": company_id, "url": url},
+        ).mappings().first()
+        return int(row["id"]) if row else None
+
+    def _record_repeat_send(session, pid: int) -> None:
+        session.execute(
+            text(
+                """
+                UPDATE prospects
+                SET outreach_message = :message,
+                    outreach_sent = 1, outreach_status = 'sent', outreach_dispatch_status = 'sent',
+                    outreach_dispatch_attempts = outreach_dispatch_attempts + 1,
+                    outreach_attempts = outreach_attempts + 1,
+                    outreach_last_dispatch_at_utc = :now, outreach_sent_at_utc = :now
+                WHERE id = :id
+                """
+            ),
+            {"message": message, "now": _now_utc(), "id": pid},
+        )
+
+    already_tracked = False
+    with session_scope() as session:
+        company = session.execute(
+            text(
+                "SELECT id FROM company_research WHERE agent_id = :aid AND search_query = :marker"
+            ),
+            {"aid": resolved_agent_id, "marker": "__manual_linkedin_send__"},
+        ).mappings().first()
+        if company:
+            company_id = int(company["id"])
+        else:
+            session.execute(
+                text(
+                    """
+                    INSERT INTO company_research
+                        (agent_id, company_name, search_query, research_status, attempts, created_at_utc, updated_at_utc)
+                    VALUES
+                        (:aid, 'Manual outreach', :marker, 'manual', 0, :now, :now)
+                    """
+                ),
+                {"aid": resolved_agent_id, "marker": "__manual_linkedin_send__", "now": _now_utc()},
+            )
+            company_id = int(session.execute(text("SELECT LAST_INSERT_ID()")).scalar_one())
+
+        # Idempotent: a repeat send to an already-tracked profile updates the
+        # existing row instead of tripping uq_prospect_profile_company_agent.
+        prospect_id = _find_prospect(session, company_id)
+        if prospect_id is not None:
+            already_tracked = True
+            _record_repeat_send(session, prospect_id)
+
+    if prospect_id is None:
+        try:
+            with session_scope() as session:
+                session.execute(
+                    text(
+                        """
+                        INSERT INTO prospects (
+                            agent_id, company_research_id, linkedin_profile_url,
+                            search_confidence, contact_info_available, message_available, connect_available,
+                            company_match_confidence, outreach_feasibility_score, contact_relevance_score,
+                            dossier_status, outreach_dispatch_status, outreach_dispatch_channel,
+                            outreach_dispatch_attempts, outreach_message, outreach_sent,
+                            outreach_status, outreach_attempts, outreach_last_dispatch_at_utc,
+                            outreach_sent_at_utc, outreach_required, outreach_in_progress, created_at_utc
+                        ) VALUES (
+                            :agent_id, :company_id, :url,
+                            0, 0, 1, 0,
+                            0, 0, 0,
+                            'manual', 'sent', 'linkedin',
+                            1, :message, 1,
+                            'sent', 1, :now,
+                            :now, 0, 0, :now
+                        )
+                        """
+                    ),
+                    {
+                        "agent_id": resolved_agent_id, "company_id": company_id, "url": url,
+                        "message": message, "now": _now_utc(),
+                    },
+                )
+                prospect_id = int(session.execute(text("SELECT LAST_INSERT_ID()")).scalar_one())
+        except IntegrityError:
+            # Raced by a concurrent send that inserted the same profile between
+            # our lookup and insert — reuse the winner's row.
+            with session_scope() as session:
+                prospect_id = _find_prospect(session, company_id)
+                if prospect_id is None:
+                    raise
+                already_tracked = True
+                _record_repeat_send(session, prospect_id)
+
+    # Conversation tracking: create the baseline row for a new prospect
+    # (idempotent helper), or append this send to the existing thread so
+    # thread_json stays truthful about what we've actually sent.
+    from db.models import LinkedInConversationORM
+    from outreach.linkedin_reply_handler import LinkedInReplyHandler
+
+    conv_appended = False
+    if already_tracked:
+        with session_scope() as session:
+            conv = session.query(LinkedInConversationORM).filter_by(prospect_id=prospect_id).one_or_none()
+            if conv is not None:
+                conv.append_message("us", message)
+                conv.messages_sent = (conv.messages_sent or 0) + 1
+                conv.last_message_sent_utc = _now_utc()
+                conv_appended = True
+    if not conv_appended:
+        LinkedInReplyHandler.create_conversation_for_prospect(
+            prospect_id=prospect_id,
+            agent_id=resolved_agent_id,
+            linkedin_profile_url=url,
+            first_message_text=message,
+        )
+
+    logger.info(
+        "LinkedIn manual send to %s by user='%s' -> prospect_id=%d (action=%s, already_tracked=%s)",
+        url, user, prospect_id, action, already_tracked,
+    )
+    return {
+        "success": True,
+        "prospect_id": prospect_id,
+        "run_id": run_id,
+        "action": action,
+        "already_tracked": already_tracked,
+    }
+
+
+@app.get("/api/ingestion/runs")
+def list_ingestion_runs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    user: str = Depends(_auth_user),
+) -> dict:
+    offset = (page - 1) * page_size
+    with session_scope() as session:
+        total = session.execute(text("SELECT COUNT(1) FROM ingestion_runs")).scalar_one()
+        rows = session.execute(
+            text(
+                """
+                SELECT id, source, target_url, status, stage, pages_crawled, pages_in_queue,
+                       chunks_created, chunks_embedded, chunks_stored, progress_pct, eta_seconds,
+                       error_text, triggered_by, started_at_utc, ended_at_utc
+                FROM ingestion_runs
+                ORDER BY started_at_utc DESC
+                LIMIT :limit OFFSET :offset
+                """
+            ),
+            {"limit": page_size, "offset": offset},
+        ).mappings().all()
+    return {"items": [dict(r) for r in rows], "total": total, "page": page, "page_size": page_size}
+
+
+@app.get("/api/ingestion/runs/{run_id}")
+def ingestion_run_detail(run_id: int, user: str = Depends(_auth_user)) -> dict:
+    with session_scope() as session:
+        row = session.execute(
+            text("SELECT * FROM ingestion_runs WHERE id = :id"), {"id": run_id}
+        ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Ingestion run not found")
+    return dict(row)
 
 
 @app.get("/api/candidate-profiles")
@@ -1141,12 +1885,59 @@ def _python_exe() -> str:
     return sys.executable
 
 
+# Set once at startup by _run_pipeline_python_check. When non-None, every
+# subprocess launch fails fast with this actionable message instead of dying
+# deep inside a pipeline with a cryptic ModuleNotFoundError.
+_PIPELINE_PYTHON_ERROR: Optional[str] = None
+
+# Packages every pipeline subprocess needs at import time. Kept minimal:
+# a missing member here is a hard failure for ALL pipelines, not just one.
+_PIPELINE_REQUIRED_IMPORTS = "sqlalchemy, pymysql, dotenv, playwright, chromadb"
+
+
+def _run_pipeline_python_check() -> None:
+    """
+    Probe the interpreter that will actually run pipeline subprocesses (which
+    may be a DIFFERENT venv than the one running this backend — this machine
+    has both .venv and venv). On failure, records an actionable error naming
+    the interpreter so the drift is surfaced instead of papered over.
+    """
+    global _PIPELINE_PYTHON_ERROR
+    exe = _python_exe()
+    try:
+        proc = subprocess.run(
+            [exe, "-c", f"import {_PIPELINE_REQUIRED_IMPORTS}"],
+            capture_output=True, text=True, timeout=120,
+        )
+    except Exception as exc:
+        _PIPELINE_PYTHON_ERROR = (
+            f"Pipeline interpreter '{exe}' could not be executed: {exc}. "
+            f"Set APP_UI_PYTHON in .env to the correct python.exe."
+        )
+        logger.error(_PIPELINE_PYTHON_ERROR)
+        return
+    if proc.returncode != 0:
+        lines = (proc.stderr or proc.stdout or "").strip().splitlines()
+        last = lines[-1] if lines else "unknown import error"
+        _PIPELINE_PYTHON_ERROR = (
+            f"Pipeline interpreter '{exe}' is missing required packages ({last}). "
+            f"This machine has two virtualenvs (.venv is used for subprocesses, venv for manual runs) — "
+            f"run '{exe} -m pip install -r requirements_clean.txt', or point APP_UI_PYTHON at the venv "
+            f"that has everything installed."
+        )
+        logger.error(_PIPELINE_PYTHON_ERROR)
+        return
+    logger.info("Pipeline interpreter check passed: %s can import [%s].", exe, _PIPELINE_REQUIRED_IMPORTS)
+
+
 def _pipeline_script(pipeline: str) -> str:
     mapping = {
         "ingest": ROOT_DIR / "scheduler" / "run_ingest.py",
         "research": ROOT_DIR / "scheduler" / "run_research.py",
         "intelligence": ROOT_DIR / "scheduler" / "run_intelligence.py",
         "candidate_hunt": ROOT_DIR / "scheduler" / "run_candidate_hunt.py",
+        "rag_ingest": ROOT_DIR / "scheduler" / "run_rag_ingest.py",
+        "reply_check": ROOT_DIR / "scheduler" / "p_reply_handler.py",
     }
     return str(mapping[pipeline])
 
@@ -1222,6 +2013,110 @@ def _run_pipeline_async(
             message=f"Run error: {exc}",
             log_text=str(exc),
         )
+
+
+# ---------------------------------------------------------------------------
+# LinkedIn automation: shared lock + backend-owned reply-check scheduler
+#
+# All LinkedIn/CDP-Chrome-driving operations (the scheduled reply sweep, a
+# manual single-prospect check, and a manual LinkedIn send) share one Chrome
+# instance and must never run concurrently. The scheduler awaits this lock
+# (queueing behind any in-progress manual action); manual endpoints instead
+# fail fast with 409 so a user action never blocks on a long sweep.
+# ---------------------------------------------------------------------------
+
+_linkedin_automation_lock = asyncio.Lock()
+
+
+def _run_subprocess_sync(cmd: List[str], timeout_sec: int = 60 * 30) -> Tuple[int, str]:
+    if _PIPELINE_PYTHON_ERROR:
+        # Fail fast with the actionable startup diagnosis instead of a cryptic
+        # ModuleNotFoundError from deep inside the pipeline.
+        logger.error("Refusing to launch subprocess: %s", _PIPELINE_PYTHON_ERROR)
+        return -1, _PIPELINE_PYTHON_ERROR
+    logger.info("Launching subprocess: %s", " ".join(cmd))
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(ROOT_DIR),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        out, _ = proc.communicate(timeout=timeout_sec)
+        return proc.returncode, (out or "")[-25000:]
+    except subprocess.TimeoutExpired:
+        if proc is not None:
+            proc.kill()
+        return -1, "Subprocess timed out."
+    except Exception as exc:
+        return -1, f"Subprocess error: {exc}"
+
+
+def _insert_pipeline_run(pipeline: str, agent_id: Optional[int], triggered_by: str, message: str) -> int:
+    with session_scope() as session:
+        session.execute(
+            text(
+                """
+                INSERT INTO pipeline_runs (pipeline, agent_id, status, started_at_utc, triggered_by, message)
+                VALUES (:pipeline, :agent_id, 'running', :started_at, :by, :msg)
+                """
+            ),
+            {
+                "pipeline": pipeline,
+                "agent_id": agent_id,
+                "started_at": _now_utc(),
+                "by": triggered_by,
+                "msg": message,
+            },
+        )
+        return int(session.execute(text("SELECT LAST_INSERT_ID()")).scalar_one())
+
+
+async def _run_reply_sweep(triggered_by: str = "scheduler") -> None:
+    """
+    Full sweep over every active LinkedIn conversation across all agents.
+    Awaits the automation lock rather than skipping — if a manual action is
+    in progress, this run queues and starts the moment the lock frees up,
+    so a tick is never silently dropped.
+    """
+    async with _linkedin_automation_lock:
+        run_id = _insert_pipeline_run(
+            "reply_check", None, triggered_by, "Scheduled reply-check sweep (all agents)."
+        )
+        cmd = [_python_exe(), _pipeline_script("reply_check")]
+        returncode, out = await asyncio.to_thread(_run_subprocess_sync, cmd, 60 * 60)
+        if returncode == 0:
+            _update_run(run_id, status="completed", ended_at_utc=_now_utc(), message="Completed successfully.", log_text=out)
+        else:
+            _update_run(run_id, status="failed", ended_at_utc=_now_utc(), message=f"Exited with code {returncode}", log_text=out)
+
+
+def _reply_check_interval_seconds() -> int:
+    try:
+        from config import AppConfig
+        reset_runtime_settings_cache()
+        minutes = AppConfig().reply_policy.scheduler_interval_minutes
+    except Exception:
+        logger.warning("Could not read REPLY_CHECK_INTERVAL_MINUTES — defaulting to 15.", exc_info=True)
+        minutes = 15
+    return max(60, int(minutes) * 60)
+
+
+async def _reply_scheduler_loop() -> None:
+    """
+    Fires once immediately, then every REPLY_CHECK_INTERVAL_MINUTES while the
+    backend runs. A backend restart re-enters this loop and fires immediately
+    again. Never raises — a failed sweep is logged/recorded and the loop
+    continues to its next tick.
+    """
+    while True:
+        try:
+            await _run_reply_sweep(triggered_by="scheduler")
+        except Exception:
+            logger.error("Reply scheduler sweep raised an unhandled exception.", exc_info=True)
+        await asyncio.sleep(_reply_check_interval_seconds())
 
 
 @app.post("/api/runs/trigger")
@@ -1536,6 +2431,34 @@ def list_settings(user: str = Depends(_auth_user)) -> dict:
     return {"items": items}
 
 
+def _validate_setting_value(key: str, value: Any) -> None:
+    """
+    Reject values the runtime would otherwise silently clamp, so a save that
+    cannot take effect as typed fails loudly instead of looking successful.
+    """
+    if key != "REPLY_CHECK_INTERVAL_MINUTES":
+        return
+    minutes: Optional[float] = None
+    if not isinstance(value, bool):
+        try:
+            minutes = float(value)
+        except (TypeError, ValueError):
+            minutes = None
+    if minutes is None or minutes != int(minutes):
+        raise HTTPException(
+            status_code=400,
+            detail="REPLY_CHECK_INTERVAL_MINUTES must be a whole number of minutes.",
+        )
+    if minutes < 1:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "REPLY_CHECK_INTERVAL_MINUTES must be at least 1 — the reply scheduler "
+                "enforces a 60-second floor and would silently clamp anything lower."
+            ),
+        )
+
+
 @app.put("/api/settings")
 def upsert_setting(payload: SettingUpdate, user: str = Depends(_auth_user)) -> dict:
     key = (payload.key or "").strip()
@@ -1543,6 +2466,7 @@ def upsert_setting(payload: SettingUpdate, user: str = Depends(_auth_user)) -> d
         raise HTTPException(status_code=400, detail="Setting key is required")
     if is_secret_setting_key(key):
         raise HTTPException(status_code=400, detail=f"Setting '{key}' is secret and env-only.")
+    _validate_setting_value(key, payload.value)
 
     default_description = None
     default_config_type = get_config_type_for_key(key)

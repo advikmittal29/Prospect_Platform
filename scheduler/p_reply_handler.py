@@ -71,6 +71,14 @@ Examples:
     )
     parser.add_argument("--agent-id",  type=int, default=None)
     parser.add_argument("--agent-key", type=str, default=None)
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Parallel browser tabs used to process conversations "
+             "(default: REPLY_MAX_CONCURRENT_WORKERS from config; 1 = sequential).",
+    )
 
     parser.add_argument(
         "--test-prospect-id",
@@ -202,9 +210,10 @@ def main() -> int:
             run_config = {"agent_key": agent.agent_key},
         ) as tracker:
             handler = LinkedInReplyHandler(
-                browser  = browser,
-                config   = config,
-                agent_id = agent.agent_id,
+                browser     = browser,
+                config      = config,
+                agent_id    = agent.agent_id,
+                max_workers = args.max_workers,
             )
             stats = handler.run()
             tracker.mark_completed(metrics=stats)

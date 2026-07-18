@@ -8,8 +8,10 @@ import { AgentDashboardPage } from "./pages/AgentDashboardPage";
 import { AgentCompaniesPage } from "./pages/AgentCompaniesPage";
 import { AgentProspectsPage } from "./pages/AgentProspectsPage";
 import { AgentLeadSourcesPage } from "./pages/AgentLeadSourcesPage";
+import { AgentLinkedInPage } from "./pages/AgentLinkedInPage";
 import { AgentSettingsPage } from "./pages/AgentSettingsPage";
 import { SystemRunsPage } from "./pages/SystemRunsPage";
+import { SystemIngestionPage } from "./pages/SystemIngestionPage";
 import { SystemSettingsPage } from "./pages/SystemSettingsPage";
 
 /**
@@ -64,12 +66,14 @@ export default function App() {
           <Route path="companies"    element={<AgentCompaniesPage />} />
           <Route path="prospects"    element={<AgentProspectsPage />} />
           <Route path="lead-sources" element={<AgentLeadSourcesPage />} />
+          <Route path="linkedin"     element={<AgentLinkedInPage />} />
           <Route path="settings"     element={<AgentSettingsPage />} />
         </Route>
 
         {/* System-level routes */}
-        <Route path="system/runs"     element={<SystemRunsPage />} />
-        <Route path="system/settings" element={<SystemSettingsPage />} />
+        <Route path="system/runs"      element={<SystemRunsPage />} />
+        <Route path="system/ingestion" element={<SystemIngestionPage />} />
+        <Route path="system/settings"  element={<SystemSettingsPage />} />
       </Route>
 
       {/* Any unknown path redirects to root, which is itself guarded. */}

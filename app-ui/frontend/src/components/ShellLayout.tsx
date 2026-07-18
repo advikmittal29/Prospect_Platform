@@ -56,12 +56,13 @@ export function ShellLayout() {
       const seg   = agentMatch[2].split("/")[0];
       const labels: Record<string, string> = {
         dashboard: "Dashboard", companies: "Companies", prospects: "Prospects",
-        "lead-sources": "Lead Sources", settings: "Configuration",
+        "lead-sources": "Lead Sources", linkedin: "LinkedIn", settings: "Configuration",
       };
       return { section: agent?.name ?? "Agent", page: labels[seg] ?? seg };
     }
-    if (p === "/system/runs")     return { section: "System", page: "Run History" };
-    if (p === "/system/settings") return { section: "System", page: "Settings" };
+    if (p === "/system/runs")      return { section: "System", page: "Run History" };
+    if (p === "/system/ingestion") return { section: "System", page: "Website Ingestion" };
+    if (p === "/system/settings")  return { section: "System", page: "Settings" };
     return { section: "Platform", page: "Page" };
   };
 
@@ -72,6 +73,7 @@ export function ShellLayout() {
     { path: "companies",    label: "Companies",     icon: "companies" },
     { path: "prospects",    label: "Prospects",     icon: "prospects" },
     { path: "lead-sources", label: "Lead Sources",  icon: "leads"     },
+    { path: "linkedin",     label: "LinkedIn",      icon: "linkedin"  },
     { path: "settings",     label: "Configuration", icon: "settings"  },
   ] as const;
 
@@ -162,6 +164,13 @@ export function ShellLayout() {
             >
               <AppIcon name="pulse" size={15} className="nav-icon" />
               Run History
+            </NavLink>
+            <NavLink
+              to="/system/ingestion"
+              className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}
+            >
+              <AppIcon name="globe" size={15} className="nav-icon" />
+              Website Ingestion
             </NavLink>
             <NavLink
               to="/system/settings"

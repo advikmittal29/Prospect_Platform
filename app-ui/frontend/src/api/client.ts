@@ -3,6 +3,7 @@ import type {
   CompanyRow, DashboardSummary, KeywordRow, LinkedInCredentialRow,
   PagedCandidates,
   PagedCompanies,
+  PagedIngestionRuns,
   PagedJobs,
   PagedProspects,
   PagedRuns,
@@ -290,6 +291,56 @@ export async function upsertLinkedinCredentials(payload: {
 }
 export async function deactivateLinkedinCredential(id: number): Promise<{ ok: boolean }> {
   return request(`/api/linkedin-credentials/${id}/deactivate`, { method: "POST" });
+}
+
+// ─── Reply checking (manual) ────────────────────────────────────────────
+export async function checkProspectMessagesNow(
+  prospectId: number
+): Promise<{ ok: boolean; run_id: number; log_tail: string }> {
+  return request(`/api/prospects/${prospectId}/check-messages`, { method: "POST" });
+}
+
+// ─── Per-prospect outreach message: edit + send ─────────────────────────
+export async function updateProspectMessage(
+  prospectId: number,
+  message: string
+): Promise<{ ok: boolean; prospect_id: number; outreach_message: string }> {
+  return request(`/api/prospects/${prospectId}/message`, {
+    method: "PATCH",
+    body: JSON.stringify({ message }),
+  });
+}
+
+/** Sends whatever text is currently stored for this prospect. */
+export async function sendProspectMessage(
+  prospectId: number
+): Promise<{ success: boolean; prospect_id: number; run_id: number; action: string; message: string }> {
+  return request(`/api/prospects/${prospectId}/send`, { method: "POST" });
+}
+
+/** Generates + stores an outreach message for one prospect (per-prospect Intelligence). */
+export async function generateProspectMessage(
+  prospectId: number
+): Promise<{ ok: boolean; prospect_id: number; message: string; run_id: number }> {
+  return request(`/api/prospects/${prospectId}/generate-message`, { method: "POST" });
+}
+
+// ─── LinkedIn manual send ───────────────────────────────────────────────
+export async function generateLinkedInMessage(payload: {
+  profile_url: string; agent_id?: number | null;
+}): Promise<{ message: string; name?: string | null; headline?: string | null; current_company?: string | null }> {
+  return request("/api/linkedin/generate-message", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export async function sendLinkedInMessage(payload: {
+  profile_url: string; message: string; agent_id?: number | null;
+}): Promise<{ success: boolean; prospect_id: number; run_id: number }> {
+  return request("/api/linkedin/send", { method: "POST", body: JSON.stringify(payload) });
+}
+
+// ─── Website ingestion ───────────────────────────────────────────────────
+export async function getIngestionRuns(page = 1, pageSize = 50): Promise<PagedIngestionRuns> {
+  return request(`/api/ingestion/runs?page=${page}&page_size=${pageSize}`);
 }
 
 // ─── Settings ─────────────────────────────────────────────────────────

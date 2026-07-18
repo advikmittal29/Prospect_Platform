@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
-import { getProspectDetail, getProspects } from "../api/client";
+import {
+  checkProspectMessagesNow,
+  generateProspectMessage,
+  getProspectDetail,
+  getProspects,
+  sendProspectMessage,
+  updateProspectMessage,
+} from "../api/client";
 import type { ProspectDetail, ProspectRow } from "../api/types";
 import { AppIcon, Modal, Pagination, Spinner } from "../components/index";
 
@@ -16,7 +23,33 @@ function tryParseJson(v: unknown): any {
   try { return JSON.parse(v); } catch { return v; }
 }
 
-type SortKey = "name" | "current_title" | "company_name" | "contact_relevance_score" | "outreach_dispatch_status";
+const REMARKS: Record<string, { label: string; fg: string; bg: string }> = {
+  email_sent:     { label: "Email sent to manager", fg: "#166534", bg: "#dcfce7" },
+  handed_off:     { label: "Handed off",            fg: "#166534", bg: "#dcfce7" },
+  meeting_booked: { label: "Meeting booked",        fg: "#1e40af", bg: "#dbeafe" },
+  talking:        { label: "Talking",               fg: "#1e40af", bg: "#dbeafe" },
+  in_process:     { label: "In process",            fg: "#92400e", bg: "#fef3c7" },
+  not_interested: { label: "Not interested",        fg: "#991b1b", bg: "#fee2e2" },
+  closed:         { label: "Closed",                fg: "#374151", bg: "#f3f4f6" },
+  not_contacted:  { label: "Not contacted",         fg: "#6b7280", bg: "#f3f4f6" },
+};
+
+function RemarkPill({ status }: { status?: string | null }) {
+  const key = status ?? "not_contacted";
+  // An unrecognized status renders as its raw value in neutral grey rather
+  // than silently masquerading as "Not contacted".
+  const r = REMARKS[key] ?? { label: key.replace(/_/g, " "), fg: "#374151", bg: "#f3f4f6" };
+  return (
+    <span style={{
+      fontSize: "0.72rem", fontWeight: 700, padding: "3px 9px",
+      borderRadius: 999, background: r.bg, color: r.fg, whiteSpace: "nowrap",
+    }}>
+      {r.label}
+    </span>
+  );
+}
+
+type SortKey = "name" | "current_title" | "company_name" | "contact_relevance_score" | "outreach_dispatch_status" | "engagement_status";
 type SortDir = "asc" | "desc";
 type DetailTab = "profile" | "assessment" | "dossier" | "outreach";
 
@@ -36,6 +69,22 @@ export function AgentProspectsPage() {
   const [detail, setDetail]           = useState<ProspectDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [activeTab, setActiveTab]     = useState<DetailTab>("profile");
+  const [checkingMessages, setCheckingMessages] = useState(false);
+  const [checkResult, setCheckResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Outreach message editing + manual send
+  const [messageDraft, setMessageDraft] = useState("");
+  const [savingMessage, setSavingMessage] = useState(false);
+  const [sendResult, setSendResult] = useState<{ ok: boolean; text: string } | null>(null);
+  // The pending send awaiting confirmation. `message` is the exact text that
+  // will go out, so the dialog can never promise something different.
+  const [confirmSend, setConfirmSend] = useState<
+    { id: number; name: string; message: string; dirty: boolean } | null
+  >(null);
+  const [confirmLoading, setConfirmLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+  // Per-prospect message generation (id currently generating, from row or modal)
+  const [generatingId, setGeneratingId] = useState<number | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -56,13 +105,144 @@ export function AgentProspectsPage() {
   const openDetail = async (row: ProspectRow) => {
     setDetail(row as ProspectDetail);
     setActiveTab("profile");
+    setCheckResult(null);
+    setSendResult(null);
+    setMessageDraft("");
     setDetailLoading(true);
     try {
-      setDetail(await getProspectDetail(row.id, id));
+      const d = await getProspectDetail(row.id, id);
+      setDetail(d);
+      setMessageDraft(d.outreach_message ?? "");
     } catch {
       // use basic row data
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  const draftDirty = !!detail && messageDraft !== (detail.outreach_message ?? "");
+
+  /** Generate (or regenerate) the AI outreach message for one prospect. Used by
+   *  the row lightning button (when no message exists yet) and the modal. */
+  const handleGenerate = async (prospectId: number) => {
+    setGeneratingId(prospectId);
+    setSendResult(null);
+    try {
+      const res = await generateProspectMessage(prospectId);
+      setRows((rs) =>
+        rs.map((r) => (r.id === prospectId ? { ...r, has_outreach_message: true } : r))
+      );
+      if (detail?.id === prospectId) {
+        setDetail({ ...detail, outreach_message: res.message });
+        setMessageDraft(res.message);
+      }
+      setSendResult({ ok: true, text: "Message generated." });
+    } catch (err) {
+      setSendResult({ ok: false, text: err instanceof Error ? err.message : "Generation failed" });
+    } finally {
+      setGeneratingId(null);
+    }
+  };
+
+  const handleSaveMessage = async () => {
+    if (!detail) return;
+    setSavingMessage(true);
+    setSendResult(null);
+    try {
+      await updateProspectMessage(detail.id, messageDraft);
+      setDetail({ ...detail, outreach_message: messageDraft });
+      setRows((rs) =>
+        rs.map((r) =>
+          r.id === detail.id ? { ...r, has_outreach_message: messageDraft.trim().length > 0 } : r
+        )
+      );
+      setSendResult({ ok: true, text: "Message saved." });
+    } catch (err) {
+      setSendResult({ ok: false, text: err instanceof Error ? err.message : "Save failed" });
+    } finally {
+      setSavingMessage(false);
+    }
+  };
+
+  /** Opens the confirm dialog for a row — pulls the stored message so the
+   *  dialog shows exactly what will be sent rather than a blind "Send?". */
+  const requestSendFromRow = async (row: ProspectRow) => {
+    setSendResult(null);
+    setConfirmLoading(true);
+    setConfirmSend({ id: row.id, name: row.name ?? "this prospect", message: "", dirty: false });
+    try {
+      const d = await getProspectDetail(row.id, id);
+      setConfirmSend({
+        id: row.id,
+        name: d.name ?? row.name ?? "this prospect",
+        message: d.outreach_message ?? "",
+        dirty: false,
+      });
+    } catch {
+      // Leave the dialog open without a preview rather than dropping the intent.
+    } finally {
+      setConfirmLoading(false);
+    }
+  };
+
+  const requestSendFromModal = () => {
+    if (!detail) return;
+    setSendResult(null);
+    setConfirmSend({
+      id: detail.id,
+      name: detail.name ?? "this prospect",
+      message: messageDraft,
+      dirty: draftDirty,
+    });
+  };
+
+  const handleConfirmedSend = async () => {
+    if (!confirmSend) return;
+    const { id: pid, message, dirty } = confirmSend;
+    setSending(true);
+    try {
+      // The send endpoint reads the STORED message, so an unsaved edit would
+      // otherwise send the old text — persist the draft first so what the
+      // dialog previewed is what actually goes out.
+      if (dirty) {
+        await updateProspectMessage(pid, message);
+        if (detail?.id === pid) setDetail({ ...detail, outreach_message: message });
+      }
+      const res = await sendProspectMessage(pid);
+      setSendResult({ ok: true, text: res.message || "Message sent." });
+      setConfirmSend(null);
+      await load();
+      if (detail?.id === pid) {
+        try {
+          const d = await getProspectDetail(pid, id);
+          setDetail(d);
+          setMessageDraft(d.outreach_message ?? "");
+        } catch {
+          // keep the existing detail
+        }
+      }
+    } catch (err) {
+      setSendResult({ ok: false, text: err instanceof Error ? err.message : "Send failed" });
+      setConfirmSend(null);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleCheckMessagesNow = async () => {
+    if (!detail) return;
+    setCheckingMessages(true);
+    setCheckResult(null);
+    try {
+      const result = await checkProspectMessagesNow(detail.id);
+      setCheckResult({
+        ok: result.ok,
+        text: result.ok ? "Checked — up to date." : "Check completed with errors — see Run History for details.",
+      });
+    } catch (err) {
+      setCheckResult({ ok: false, text: err instanceof Error ? err.message : "Check failed" });
+    } finally {
+      setCheckingMessages(false);
     }
   };
 
@@ -140,6 +320,30 @@ export function AgentProspectsPage() {
           <span className="grid-count">{rows.length} prospects</span>
         </div>
 
+        {/* Send outcome for list-triggered sends (the modal shows its own copy) */}
+        {sendResult && !detail && (
+          <div
+            className={sendResult.ok ? "success-banner" : "error-banner"}
+            style={{
+              margin: "0 16px 12px", borderRadius: "var(--r-md)", padding: "10px 14px",
+              fontSize: "0.82rem", fontWeight: 600,
+              display: "flex", alignItems: "center", gap: 8,
+              color: sendResult.ok ? "var(--success)" : "var(--danger, #dc2626)",
+            }}
+          >
+            <AppIcon name={sendResult.ok ? "check" : "close"} size={13} />
+            {sendResult.text}
+            <button
+              className="btn-icon"
+              style={{ marginLeft: "auto" }}
+              onClick={() => setSendResult(null)}
+              title="Dismiss"
+            >
+              <AppIcon name="close" size={12} />
+            </button>
+          </div>
+        )}
+
         <div style={{ overflowX: "auto" }}>
           <table className="data-table">
             <thead>
@@ -159,15 +363,18 @@ export function AgentProspectsPage() {
                 <th className={`sortable ${sortKey === "outreach_dispatch_status" ? "sort-active" : ""}`} onClick={() => toggleSort("outreach_dispatch_status")}>
                   Outreach <SortIcon col="outreach_dispatch_status" />
                 </th>
-                <th style={{ width: 60 }}></th>
+                <th className={`sortable ${sortKey === "engagement_status" ? "sort-active" : ""}`} onClick={() => toggleSort("engagement_status")}>
+                  Remark <SortIcon col="engagement_status" />
+                </th>
+                <th style={{ width: 108 }}></th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={6} className="loading-row"><Spinner size={16} /> &nbsp;Loading prospects…</td></tr>
+                <tr><td colSpan={7} className="loading-row"><Spinner size={16} /> &nbsp;Loading prospects…</td></tr>
               ) : paged.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={7}>
                     <div className="empty-state" style={{ padding: "52px" }}>
                       <AppIcon name="prospects" size={32} />
                       <p>No prospects found. Run the Intelligence pipeline to generate prospect data.</p>
@@ -197,7 +404,38 @@ export function AgentProspectsPage() {
                         </span>
                       </td>
                       <td>
+                        <RemarkPill status={row.engagement_status} />
+                      </td>
+                      <td>
                         <div className="row-actions">
+                          {row.has_outreach_message ? (
+                            <button
+                              className="btn-icon"
+                              onClick={() => void requestSendFromRow(row)}
+                              disabled={!row.linkedin_profile_url || generatingId === row.id}
+                              title={
+                                !row.linkedin_profile_url
+                                  ? "No LinkedIn profile URL"
+                                  : "Send the generated message"
+                              }
+                              style={row.linkedin_profile_url ? { color: "var(--amber)" } : undefined}
+                            >
+                              <AppIcon name="zap" size={13} />
+                            </button>
+                          ) : (
+                            <button
+                              className="btn-icon"
+                              onClick={() => void handleGenerate(row.id)}
+                              disabled={!row.linkedin_profile_url || generatingId === row.id}
+                              title={
+                                !row.linkedin_profile_url
+                                  ? "No LinkedIn profile URL"
+                                  : "Generate an outreach message for this prospect"
+                              }
+                            >
+                              {generatingId === row.id ? <Spinner size={13} /> : <AppIcon name="pulse" size={13} />}
+                            </button>
+                          )}
                           <button className="btn-icon" onClick={() => void openDetail(row)} title="View dossier">
                             <AppIcon name="eye" size={13} />
                           </button>
@@ -266,11 +504,22 @@ export function AgentProspectsPage() {
                   )}
                 </div>
               </div>
-              <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-                {detail.linkedin_profile_url && (
-                  <a href={detail.linkedin_profile_url} target="_blank" rel="noreferrer" className="btn-secondary">
-                    <AppIcon name="linkedin" size={13} /> LinkedIn
-                  </a>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, flexShrink: 0 }}>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {detail.linkedin_profile_url && (
+                    <a href={detail.linkedin_profile_url} target="_blank" rel="noreferrer" className="btn-secondary">
+                      <AppIcon name="linkedin" size={13} /> LinkedIn
+                    </a>
+                  )}
+                  <button className="btn-secondary" onClick={() => void handleCheckMessagesNow()} disabled={checkingMessages}>
+                    {checkingMessages ? <Spinner size={13} /> : <AppIcon name="refresh" size={13} />}
+                    Check messages now
+                  </button>
+                </div>
+                {checkResult && (
+                  <span style={{ fontSize: "0.74rem", fontWeight: 600, color: checkResult.ok ? "var(--success)" : "var(--danger, #dc2626)" }}>
+                    {checkResult.ok ? "✓ " : "⚠ "}{checkResult.text}
+                  </span>
                 )}
               </div>
             </div>
@@ -360,7 +609,7 @@ export function AgentProspectsPage() {
                 {/* Outreach tab */}
                 {activeTab === "outreach" && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-                    <div style={{ display: "flex", gap: 32 }}>
+                    <div style={{ display: "flex", gap: 32, flexWrap: "wrap" }}>
                       <div className="kv-item">
                         <span className="kv-label">Dispatch Status</span>
                         <span className={`status-pill ${detail.outreach_dispatch_status ?? "pending"}`}>
@@ -377,28 +626,187 @@ export function AgentProspectsPage() {
                           <span className="kv-value">{new Date(detail.outreach_sent_at_utc).toLocaleString()}</span>
                         </div>
                       )}
-                    </div>
-                    <div>
-                      <div className="form-label" style={{ marginBottom: 8 }}>Generated Message</div>
-                      {detail.outreach_message ? (
-                        <div style={{
-                          background: "var(--bg-subtle)", padding: "16px 20px",
-                          borderRadius: "var(--r-lg)", lineHeight: 1.7,
-                          fontSize: "0.88rem", whiteSpace: "pre-wrap",
-                          border: "1px solid var(--border)", color: "var(--ink-1)",
-                        }}>
-                          {detail.outreach_message}
-                        </div>
-                      ) : (
-                        <div className="empty-state" style={{ padding: "24px", background: "var(--bg-subtle)", borderRadius: "var(--r-md)" }}>
-                          <p>No outreach message generated yet. Run the Intelligence pipeline.</p>
+                      <div className="kv-item">
+                        <span className="kv-label">Remark</span>
+                        <RemarkPill status={detail.engagement_status} />
+                      </div>
+                      {detail.conversation?.lead_stage && (
+                        <div className="kv-item">
+                          <span className="kv-label">Lead Stage</span>
+                          <span className="kv-value">{detail.conversation.lead_stage}</span>
                         </div>
                       )}
+                      {detail.conversation && (
+                        <div className="kv-item">
+                          <span className="kv-label">Messages</span>
+                          <span className="kv-value">
+                            {detail.conversation.messages_sent ?? 0} sent / {detail.conversation.messages_received ?? 0} received
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                    {detail.conversation?.handoff_reason && (
+                      <div style={{
+                        fontSize: "0.8rem", color: "var(--ink-2)",
+                        background: "var(--bg-subtle)", padding: "10px 14px",
+                        borderRadius: "var(--r-md)", border: "1px solid var(--border)",
+                      }}>
+                        <strong>Why:</strong> {detail.conversation.handoff_reason}
+                      </div>
+                    )}
+                    <div>
+                      <div style={{
+                        display: "flex", alignItems: "center", gap: 10, marginBottom: 8,
+                      }}>
+                        <div className="form-label" style={{ marginBottom: 0 }}>Generated Message</div>
+                        {draftDirty && (
+                          <span style={{ fontSize: "0.7rem", color: "var(--amber, #b45309)", fontWeight: 600 }}>
+                            Unsaved changes
+                          </span>
+                        )}
+                        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                          <button
+                            className="btn-secondary"
+                            onClick={() => void handleGenerate(detail.id)}
+                            disabled={generatingId === detail.id || !detail.linkedin_profile_url}
+                            title={
+                              !detail.linkedin_profile_url
+                                ? "No LinkedIn profile URL for this prospect"
+                                : messageDraft.trim()
+                                  ? "Regenerate the AI message (replaces the current text)"
+                                  : "Generate an AI outreach message for this prospect"
+                            }
+                          >
+                            {generatingId === detail.id ? <Spinner size={13} /> : <AppIcon name="pulse" size={13} />}
+                            {generatingId === detail.id
+                              ? "Generating…"
+                              : messageDraft.trim() ? "Regenerate" : "Generate"}
+                          </button>
+                          <button
+                            className="btn-secondary"
+                            onClick={() => void handleSaveMessage()}
+                            disabled={savingMessage || !draftDirty || !messageDraft.trim()}
+                            title={draftDirty ? "Save your edits" : "No changes to save"}
+                          >
+                            {savingMessage ? <Spinner size={13} /> : <AppIcon name="check" size={13} />}
+                            {savingMessage ? "Saving…" : "Save"}
+                          </button>
+                          <button
+                            className="btn-primary"
+                            onClick={requestSendFromModal}
+                            disabled={sending || !messageDraft.trim() || !detail.linkedin_profile_url}
+                            title={
+                              !detail.linkedin_profile_url
+                                ? "No LinkedIn profile URL for this prospect"
+                                : !messageDraft.trim()
+                                  ? "Write a message first"
+                                  : "Send this message on LinkedIn"
+                            }
+                          >
+                            <AppIcon name="zap" size={13} />
+                            Send
+                          </button>
+                        </div>
+                      </div>
+                      <textarea
+                        className="form-input"
+                        value={messageDraft}
+                        onChange={(e) => setMessageDraft(e.target.value)}
+                        rows={8}
+                        placeholder="No message yet — click Generate to draft one with AI, or write your own here."
+                        style={{
+                          width: "100%", resize: "vertical", lineHeight: 1.7,
+                          fontSize: "0.88rem", padding: "16px 20px",
+                          borderRadius: "var(--r-lg)", color: "var(--ink-1)",
+                        }}
+                      />
+                      <div style={{
+                        display: "flex", alignItems: "center", gap: 10, marginTop: 6,
+                        fontSize: "0.72rem", color: "var(--ink-3)",
+                      }}>
+                        <span>{messageDraft.trim().length} characters</span>
+                        {sendResult && (
+                          <span style={{
+                            marginLeft: "auto", fontWeight: 600,
+                            color: sendResult.ok ? "var(--success)" : "var(--danger, #dc2626)",
+                          }}>
+                            {sendResult.text}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}
               </div>
             )}
+          </div>
+        )}
+      </Modal>
+
+      {/* Send confirmation — shown for both the row button and the modal button */}
+      <Modal
+        open={!!confirmSend}
+        onClose={() => { if (!sending) setConfirmSend(null); }}
+        title="Send this message on LinkedIn?"
+        size="md"
+        footer={
+          <>
+            <button
+              className="btn-secondary"
+              onClick={() => setConfirmSend(null)}
+              disabled={sending}
+            >
+              Cancel
+            </button>
+            <button
+              className="btn-primary"
+              onClick={() => void handleConfirmedSend()}
+              disabled={sending || confirmLoading || !confirmSend?.message.trim()}
+            >
+              {sending ? <Spinner size={13} /> : <AppIcon name="zap" size={13} />}
+              {sending ? "Sending…" : "Send now"}
+            </button>
+          </>
+        }
+      >
+        {confirmSend && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ fontSize: "0.88rem", color: "var(--ink-1)" }}>
+              This will send the message below to{" "}
+              <strong>{confirmSend.name}</strong> on LinkedIn, right now.
+            </div>
+
+            {confirmLoading ? (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", color: "var(--ink-3)", padding: 12 }}>
+                <Spinner size={14} /> Loading message…
+              </div>
+            ) : confirmSend.message.trim() ? (
+              <div style={{
+                background: "var(--bg-subtle)", padding: "14px 18px",
+                borderRadius: "var(--r-lg)", lineHeight: 1.7,
+                fontSize: "0.85rem", whiteSpace: "pre-wrap",
+                border: "1px solid var(--border)", color: "var(--ink-1)",
+                maxHeight: 260, overflowY: "auto",
+              }}>
+                {confirmSend.message}
+              </div>
+            ) : (
+              <div className="error-banner" style={{ borderRadius: "var(--r-md)", padding: "10px 14px", fontSize: "0.82rem" }}>
+                No message to send. Run the Intelligence pipeline, or write one in the Outreach tab.
+              </div>
+            )}
+
+            {confirmSend.dirty && (
+              <div style={{ fontSize: "0.76rem", color: "var(--amber, #b45309)", fontWeight: 600 }}>
+                Your unsaved edits will be saved and sent.
+              </div>
+            )}
+
+            <div style={{ fontSize: "0.74rem", color: "var(--ink-3)", lineHeight: 1.5 }}>
+              If you aren't connected, LinkedIn may not allow a direct message — in that case a
+              connection request is sent instead, carrying this text as the invite note. Replies are
+              tracked automatically from then on.
+            </div>
           </div>
         )}
       </Modal>

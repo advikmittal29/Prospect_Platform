@@ -46,8 +46,8 @@ _SETTING_CATALOG: List[Dict[str, Any]] = [
     {"key": "CHROME_NAV_TIMEOUT_MS", "default": 30000, "description": "Chrome navigation timeout in milliseconds."},
     {"key": "CHROME_ACTION_TIMEOUT_MS", "default": 8000, "description": "Chrome action timeout in milliseconds."},
     {"key": "CHROME_RECOVERY_ATTEMPTS", "default": 2, "description": "Chrome recovery retry attempts."},
-    {"key": "LLM_PROVIDER", "default": "openai", "description": "LLM provider (openai|gemini|groq)."},
-    {"key": "LLM_MODEL", "default": "gpt-4o-mini", "description": "LLM model name."},
+    {"key": "LLM_PROVIDER", "default": "gemini", "description": "LLM provider (openai|gemini|groq)."},
+    {"key": "LLM_MODEL", "default": "gemini-3.1-flash-lite", "description": "LLM model name."},
     {"key": "LLM_TEMPERATURE", "default": 0.2, "description": "LLM temperature for generation variability."},
     {"key": "LLM_MAX_TOKENS", "default": 2000, "description": "Maximum LLM response tokens."},
     {"key": "LLM_TIMEOUT_SEC", "default": 60, "description": "LLM request timeout in seconds."},
@@ -111,6 +111,39 @@ _SETTING_CATALOG: List[Dict[str, Any]] = [
     {"key": "SMTP_USE_TLS", "default": True, "description": "Use STARTTLS for SMTP."},
     {"key": "SMTP_USE_SSL", "default": False, "description": "Use implicit SSL for SMTP."},
     {"key": "SMTP_TIMEOUT_SEC", "default": 20, "description": "SMTP timeout in seconds."},
+    {"key": "RAG_CHROMA_PATH", "default": "./rag_store", "description": "Local path for the ChromaDB persistent vector store."},
+    {"key": "RAG_COLLECTION_NAME", "default": "company_kb", "description": "ChromaDB collection name for the company knowledge base."},
+    {"key": "RAG_EMBED_MODEL", "default": "gemini-embedding-001", "description": "Gemini embedding model name."},
+    {"key": "RAG_EMBED_DIMS", "default": 768, "description": "Output dimensionality for Gemini embeddings."},
+    {"key": "RAG_TOP_K", "default": 4, "description": "Number of chunks retrieved per RAG query."},
+    {"key": "RAG_TARGET_URL", "default": "https://gnxtsystems.com", "description": "Website URL crawled by the website ingestion pipeline."},
+    {"key": "REPLY_CHECK_INTERVAL_MINUTES", "default": 15, "description": "How often the backend scheduler sweeps all LinkedIn conversations for new replies."},
+    {"key": "REPLY_HANDOFF_MANAGER_EMAIL", "default": None, "description": "Manager email address notified when a conversation is handed off to a human."},
+    {"key": "REPLY_MAX_LIGHT_QUESTIONS", "default": 2, "description": "Max light questions the bot may answer per conversation before handoff."},
+    {"key": "REPLY_MAX_BOT_REPLIES", "default": 3, "description": "Max total bot replies in a thread before forced handoff."},
+    {"key": "REPLY_LIVE_WINDOW_MIN", "default": 5.0, "description": "Reply-to-our-last-message gap (minutes) under which a conversation is treated as live."},
+    {"key": "REPLY_LIVE_REVERT_MIN", "default": 10.0, "description": "Minutes of prospect silence after which a live conversation reverts to batch mode."},
+    {"key": "REPLY_LIVE_THINK_DELAY_MIN_SEC", "default": 15.0, "description": "Minimum simulated read/think delay (seconds) before replying in live mode."},
+    {"key": "REPLY_LIVE_THINK_DELAY_MAX_SEC", "default": 60.0, "description": "Maximum simulated read/think delay (seconds) before replying in live mode."},
+    {"key": "REPLY_TYPING_MS_PER_CHAR", "default": 170.0, "description": "Average per-character typing delay (ms) when humanized typing is enabled."},
+    {"key": "REPLY_TYPING_JITTER_MS", "default": 45.0, "description": "Random jitter (ms, stddev) applied to each keystroke delay."},
+    {"key": "REPLY_TYPING_PUNCT_PAUSE_MS", "default": 180.0, "description": "Extra pause (ms) after typing punctuation characters."},
+    {"key": "REPLY_MAX_PER_CONV_24H", "default": 6, "description": "Max bot replies allowed per conversation in a rolling 24h window."},
+    {"key": "REPLY_MIN_GLOBAL_SPACING_SEC", "default": 45.0, "description": "Minimum seconds between any two outbound replies across the whole account."},
+    {"key": "REPLY_LIVE_FASTFOLLOW_MAX_ITER", "default": 3, "description": "Max extra fast-follow poll iterations for a live conversation within one run."},
+    {"key": "REPLY_LIVE_FASTFOLLOW_POLL_SEC", "default": 45.0, "description": "Seconds between fast-follow poll iterations for live conversations."},
+    {"key": "REPLY_LIVE_FASTFOLLOW_MAX_WALL_SEC", "default": 300.0, "description": "Hard wall-clock cap (seconds) on the fast-follow loop before returning control to the scheduler."},
+    {"key": "REPLY_MAX_CONCURRENT_WORKERS", "default": 3, "description": "Parallel browser tabs used by the reply handler to process conversations (1 = sequential)."},
+    {"key": "REPLY_QC_MAX_CHARS", "default": 320, "description": "Hard character cap enforced on outbound replies by the quality gate."},
+    {"key": "REPLY_QC_MAX_REGEN", "default": 1, "description": "Max regeneration attempts when a generated reply fails the quality gate."},
+    {"key": "REPLY_LIVE_ONLINE_GRACE_SEC", "default": 150.0, "description": "Seconds to linger in the thread after sending when the prospect's presence dot shows online."},
+    {"key": "REPLY_LIVE_OFFLINE_GRACE_SEC", "default": 75.0, "description": "Seconds to linger in the thread after sending when the prospect appears offline/unknown."},
+    {"key": "REPLY_LIVE_SESSION_POLL_SEC", "default": 2.5, "description": "Seconds between DOM polls while watching an open thread for live replies."},
+    {"key": "REPLY_LIVE_SESSION_SILENCE_END_MIN", "default": 4.0, "description": "Minutes of prospect silence that ends an engaged live session."},
+    {"key": "REPLY_LIVE_SESSION_MAX_MESSAGES", "default": 12, "description": "Max bot replies within one live session before it winds down."},
+    {"key": "REPLY_LIVE_SESSION_MAX_WALL_MIN", "default": 15.0, "description": "Hard wall-clock cap (minutes) on a single live session."},
+    {"key": "REPLY_LIVE_READ_BUFFER_MIN_SEC", "default": 5.0, "description": "Minimum simulated reading pause (seconds) before replying in a live session."},
+    {"key": "REPLY_LIVE_READ_BUFFER_MAX_SEC", "default": 15.0, "description": "Maximum simulated reading pause (seconds) before replying in a live session."},
 ]
 
 _SETTING_CATALOG_BY_KEY: Dict[str, Dict[str, Any]] = {
@@ -140,6 +173,8 @@ def get_config_type_for_key(key: str) -> str:
         return "outreach"
     if norm.startswith("SMTP_"):
         return "email"
+    if norm.startswith("REPLY_"):
+        return "reply_policy"
     return "general"
 
 
@@ -235,11 +270,14 @@ def _unwrap_setting(raw: Any) -> Any:
 
 def _raw_setting(name: str) -> Any:
     key = (name or "").strip()
+    env_val = os.getenv(key)
+    if env_val is not None:
+        return env_val
     if key in _DB_CONFIGURABLE_KEYS:
         cached = _runtime_settings()
         if key in cached:
             return _unwrap_setting(cached[key])
-    return os.getenv(key)
+    return None
 
 
 def _bool(name: str, default: bool = False) -> bool:
@@ -397,8 +435,8 @@ class NaukriConfig:
 
 @dataclass(frozen=True)
 class LLMConfig:
-    provider: str = field(default_factory=lambda: _str("LLM_PROVIDER", "openai"))  # openai | gemini | groq
-    model: str = field(default_factory=lambda: _str("LLM_MODEL", "gpt-4o-mini"))
+    provider: str = field(default_factory=lambda: _str("LLM_PROVIDER", "gemini"))  # openai | gemini | groq
+    model: str = field(default_factory=lambda: _str("LLM_MODEL", "gemini-3.1-flash-lite"))
     api_key: str = field(default_factory=lambda: os.getenv("LLM_API_KEY", ""))
     temperature: float = field(default_factory=lambda: _float("LLM_TEMPERATURE", 0.2))
     max_tokens: int = field(default_factory=lambda: _int("LLM_MAX_TOKENS", 2000))
@@ -504,6 +542,48 @@ class OutreachDispatchConfig:
     smtp_use_ssl: bool = field(default_factory=lambda: _bool("SMTP_USE_SSL", False))
     smtp_timeout_seconds: int = field(default_factory=lambda: _int("SMTP_TIMEOUT_SEC", 20))
 
+    # Reply-handler handoff notification recipient (reuses the SMTP settings above).
+    handoff_manager_email: Optional[str] = field(default_factory=lambda: _opt_str("REPLY_HANDOFF_MANAGER_EMAIL", None))
+
+
+@dataclass(frozen=True)
+class ReplyPolicyConfig:
+    """Tunables governing the LinkedIn reply handler's humanized conversational behavior."""
+    max_light_questions: int = field(default_factory=lambda: _int("REPLY_MAX_LIGHT_QUESTIONS", 2))
+    max_bot_replies: int = field(default_factory=lambda: _int("REPLY_MAX_BOT_REPLIES", 3))
+
+    live_window_minutes: float = field(default_factory=lambda: _float("REPLY_LIVE_WINDOW_MIN", 5.0))
+    live_revert_minutes: float = field(default_factory=lambda: _float("REPLY_LIVE_REVERT_MIN", 10.0))
+    live_think_delay_min_sec: float = field(default_factory=lambda: _float("REPLY_LIVE_THINK_DELAY_MIN_SEC", 15.0))
+    live_think_delay_max_sec: float = field(default_factory=lambda: _float("REPLY_LIVE_THINK_DELAY_MAX_SEC", 60.0))
+
+    typing_ms_per_char: float = field(default_factory=lambda: _float("REPLY_TYPING_MS_PER_CHAR", 170.0))
+    typing_jitter_ms: float = field(default_factory=lambda: _float("REPLY_TYPING_JITTER_MS", 45.0))
+    typing_punct_pause_ms: float = field(default_factory=lambda: _float("REPLY_TYPING_PUNCT_PAUSE_MS", 180.0))
+
+    max_replies_per_conversation_24h: int = field(default_factory=lambda: _int("REPLY_MAX_PER_CONV_24H", 6))
+    min_global_spacing_sec: float = field(default_factory=lambda: _float("REPLY_MIN_GLOBAL_SPACING_SEC", 45.0))
+
+    live_fastfollow_max_iterations: int = field(default_factory=lambda: _int("REPLY_LIVE_FASTFOLLOW_MAX_ITER", 3))
+    live_fastfollow_poll_sec: float = field(default_factory=lambda: _float("REPLY_LIVE_FASTFOLLOW_POLL_SEC", 45.0))
+    live_fastfollow_max_wall_sec: float = field(default_factory=lambda: _float("REPLY_LIVE_FASTFOLLOW_MAX_WALL_SEC", 300.0))
+
+    max_concurrent_workers: int = field(default_factory=lambda: _int("REPLY_MAX_CONCURRENT_WORKERS", 3))
+    qc_max_chars: int = field(default_factory=lambda: _int("REPLY_QC_MAX_CHARS", 320))
+    qc_max_regen: int = field(default_factory=lambda: _int("REPLY_QC_MAX_REGEN", 1))
+
+    live_online_grace_sec: float = field(default_factory=lambda: _float("REPLY_LIVE_ONLINE_GRACE_SEC", 150.0))
+    live_offline_grace_sec: float = field(default_factory=lambda: _float("REPLY_LIVE_OFFLINE_GRACE_SEC", 75.0))
+    live_session_poll_sec: float = field(default_factory=lambda: _float("REPLY_LIVE_SESSION_POLL_SEC", 2.5))
+    live_session_silence_end_min: float = field(default_factory=lambda: _float("REPLY_LIVE_SESSION_SILENCE_END_MIN", 4.0))
+    live_session_max_messages: int = field(default_factory=lambda: _int("REPLY_LIVE_SESSION_MAX_MESSAGES", 12))
+    live_session_max_wall_min: float = field(default_factory=lambda: _float("REPLY_LIVE_SESSION_MAX_WALL_MIN", 15.0))
+    live_read_buffer_min_sec: float = field(default_factory=lambda: _float("REPLY_LIVE_READ_BUFFER_MIN_SEC", 5.0))
+    live_read_buffer_max_sec: float = field(default_factory=lambda: _float("REPLY_LIVE_READ_BUFFER_MAX_SEC", 15.0))
+
+    scheduler_interval_minutes: int = field(default_factory=lambda: _int("REPLY_CHECK_INTERVAL_MINUTES", 15))
+
+
 @dataclass(frozen=True)
 class LinkedInOutreachConfig:
     """Configuration for the automated LinkedIn outreach sender pipeline."""
@@ -525,6 +605,16 @@ class LinkedInOutreachConfig:
 
 
 @dataclass(frozen=True)
+class RAGConfig:
+    chroma_path: str = field(default_factory=lambda: _str("RAG_CHROMA_PATH", "./rag_store"))
+    collection_name: str = field(default_factory=lambda: _str("RAG_COLLECTION_NAME", "company_kb"))
+    embed_model: str = field(default_factory=lambda: _str("RAG_EMBED_MODEL", "gemini-embedding-001"))
+    embed_dims: int = field(default_factory=lambda: _int("RAG_EMBED_DIMS", 768))
+    top_k: int = field(default_factory=lambda: _int("RAG_TOP_K", 4))
+    target_url: str = field(default_factory=lambda: _str("RAG_TARGET_URL", "https://gnxtsystems.com"))
+
+
+@dataclass(frozen=True)
 class AppConfig:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     browser: BrowserConfig = field(default_factory=BrowserConfig)
@@ -538,3 +628,5 @@ class AppConfig:
     outreach: OutreachConfig = field(default_factory=OutreachConfig)
     outreach_dispatch: OutreachDispatchConfig = field(default_factory=OutreachDispatchConfig)
     linkedin_outreach: LinkedInOutreachConfig = field(default_factory=LinkedInOutreachConfig)
+    rag: RAGConfig = field(default_factory=RAGConfig)
+    reply_policy: ReplyPolicyConfig = field(default_factory=ReplyPolicyConfig)

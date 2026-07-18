@@ -297,6 +297,7 @@ class LinkedInOutreachSender:
         self._wait_for_actions_ready()
 
         # Determine action
+        conn_state = None
         if force_action == "auto":
             conn_state = self._detect_connection_state()
             logger.info(
@@ -358,9 +359,28 @@ class LinkedInOutreachSender:
                         success=False,
                         error="--message is required when --action=message.",
                     )
-                self._open_message_overlay()
-                self._type_message(message)
-                self._send_message()
+                try:
+                    self._open_message_overlay()
+                    self._type_message(message)
+                    self._send_message()
+                except RuntimeError as exc:
+                    # Only auto-detected (not explicitly forced) MESSAGE attempts
+                    # fall back to CONNECT — an explicit force_action="message"
+                    # means the caller wants a clear error, not a silent switch.
+                    if force_action != "auto" or conn_state is None or conn_state.verdict != "not_connected":
+                        raise
+                    logger.warning(
+                        "[TEST] Direct message failed (%s) — falling back to a connection request.", exc,
+                    )
+                    class _ConnectStub:
+                        id = _DUMMY_ID
+                        outreach_message = message
+
+                    note = self._build_connect_note(_ConnectStub())  # type: ignore[arg-type]
+                    self._open_more_menu_and_click_connect()
+                    self._settle(800)
+                    self._handle_connect_modal(note)
+                    action = OutreachAction.CONNECT
 
         except Exception as exc:
             err = f"{type(exc).__name__}: {exc}"
@@ -501,7 +521,17 @@ class LinkedInOutreachSender:
         if action == OutreachAction.CONNECT:
             self._do_connect(prospect)
         elif action == OutreachAction.MESSAGE:
-            self._do_message(prospect)
+            try:
+                self._do_message(prospect)
+            except RuntimeError as exc:
+                if conn_state.verdict != "not_connected":
+                    raise
+                logger.warning(
+                    "Prospect %d: direct message failed (%s) — falling back to a connection request.",
+                    pid, exc,
+                )
+                self._do_connect(prospect)
+                return OutreachResult(prospect_id=pid, action=OutreachAction.CONNECT, success=True)
 
         return OutreachResult(prospect_id=pid, action=action, success=True)
 
@@ -537,6 +567,9 @@ class LinkedInOutreachSender:
         Early-exit (before scoring):
           Pending button visible                   → pending (confidence 95)
           More-menu contains Withdraw item         → pending (confidence 90)
+
+        Conclusive combination (bypasses scoring):
+          degree_1st + msg_link_interop_present    → connected (confidence 95)
 
         Verdict thresholds:
           score >= +20  → connected
@@ -583,6 +616,20 @@ class LinkedInOutreachSender:
         if "connect" in menu_signals:
             score -= 10
             signals.append("menu_has_connect")
+
+        # ── Conclusive: 1st-degree + a usable Message link ────────────
+        # LinkedIn renders a Follow button and a Connect item in the More menu
+        # even for people you are already connected to, so follow_btn_present
+        # (-20) and menu_has_connect (-10) both fire on genuinely connected
+        # profiles. Together they exactly cancel degree_1st (+20) and
+        # msg_link_interop_present (+10), scoring 0 → "unknown" and refusing to
+        # act on a profile we can plainly message. A 1st-degree badge plus a
+        # working message link is conclusive on its own, so let it win outright
+        # rather than letting the noise vote it down.
+        if "degree_1st" in signals and "msg_link_interop_present" in signals:
+            return ConnectionState(
+                "connected", 95, signals + ["conclusive_1st_degree_with_msg_link"]
+            )
 
         # ── Verdict ───────────────────────────────────────────────────
         if score >= 20:
@@ -662,10 +709,23 @@ class LinkedInOutreachSender:
             return OutreachAction.SKIP
 
         if state.verdict == "connected":
+            logger.info(
+                "Prospect %d: connected (confidence=%d, signals=%s) → MESSAGE.",
+                prospect.id, state.confidence, state.signals,
+            )
             return OutreachAction.MESSAGE
 
         if state.verdict == "not_connected":
-            return OutreachAction.CONNECT
+            # The Message link / compose-overlay path (_open_message_overlay) is
+            # present on non-connection profiles too — attempt a direct message
+            # first. Callers fall back to CONNECT if that attempt raises
+            # RuntimeError (no InMail credits / not an open profile).
+            logger.info(
+                "Prospect %d: not connected (confidence=%d, signals=%s) → MESSAGE first, "
+                "CONNECT on failure.",
+                prospect.id, state.confidence, state.signals,
+            )
+            return OutreachAction.MESSAGE
 
         logger.warning(
             "Prospect %d: state unknown (confidence=%d, signals=%s) → UNKNOWN.",
@@ -882,6 +942,13 @@ class LinkedInOutreachSender:
                 "Message compose area did not appear after clicking Message link."
             )
 
+    def _compose_text(self, compose: Locator) -> str:
+        """Current text in the compose box; '' if it can't be read (e.g. detached)."""
+        try:
+            return compose.inner_text(timeout=1500)
+        except Exception:
+            return ""
+
     def _type_message(self, text: str) -> None:
         page = self._page()
         compose = self._first_visible(page, _MSG_COMPOSE_SELS, timeout=4000)
@@ -889,11 +956,28 @@ class LinkedInOutreachSender:
             raise RuntimeError("Message compose area not found when attempting to type.")
         compose.click(timeout=2000)
         self._settle(200)
-        compose.fill(text)
+
+        # LinkedIn's compose box is a contenteditable Draft editor. `.fill()` writes
+        # the DOM text but does not reliably fire the input events the editor listens
+        # for, so the send button can stay disarmed and the click in _send_message
+        # becomes a silent no-op — the message looks sent but never leaves. A real
+        # keyboard input event is registered by the editor; fall back to fill only
+        # if that raises.
+        try:
+            compose.click(timeout=2000)
+            page.keyboard.insert_text(text)
+        except Exception:
+            compose.fill(text)
         self._settle(300)
+
+        # Confirm the text actually landed before we try to send, so an empty box
+        # can't be "sent" as a blank message.
+        if not (self._compose_text(compose) or "").strip():
+            raise RuntimeError("Compose box is empty after typing — message text did not register.")
 
     def _send_message(self) -> None:
         page = self._page()
+        compose = self._first_visible(page, _MSG_COMPOSE_SELS, timeout=2000)
         send_btn = self._first_visible(page, _MSG_SEND_BTN_SELS, timeout=4000)
         if send_btn is None:
             raise RuntimeError(
@@ -901,6 +985,21 @@ class LinkedInOutreachSender:
             )
         send_btn.click(timeout=4000)
         self._settle(900)
+
+        # Verify delivery. LinkedIn clears the compose box once a message is sent,
+        # so a box that still holds our text means the click was a no-op (disarmed
+        # button / interception) — surface that as a failure rather than reporting a
+        # phantom success. A detached/unreadable box counts as sent (overlay
+        # re-rendered after delivery).
+        if compose is not None:
+            for _ in range(6):
+                if not (self._compose_text(compose) or "").strip():
+                    return
+                self._settle(400)
+            raise RuntimeError(
+                "Send button clicked but the compose box still holds the message — "
+                "LinkedIn did not accept the send."
+            )
 
     # ══════════════════════════════════════════════════════════════════
     # UI UTILITY HELPERS
